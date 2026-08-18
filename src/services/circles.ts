@@ -19,13 +19,6 @@ export interface CircleSummary {
   country: string;
   category: CircleCategory;
   isPrivate: boolean;
-  /**
-   * The cover photograph's storage key, or null to fall back to the generated
-   * plate. Always null at present: the deployed database refuses every ALTER
-   * TABLE, so the `cover_key` column exists locally but cannot be added to
-   * production. Kept in the shape so the UI is ready when the cover moves onto
-   * the `photos` table, which needs no schema change.
-   */
   coverKey: string | null;
   /** Approved members, the host included. Same number everywhere it appears. */
   memberCount: number;
@@ -73,6 +66,7 @@ const summaryColumns = {
   country: circles.country,
   category: circles.category,
   isPrivate: circles.isPrivate,
+  coverKey: circles.coverKey,
   memberCount: approvedMemberCount(circles.id),
   eventCount: publishedEventCount(circles.id),
 };
@@ -175,6 +169,7 @@ function toSummary(row: {
   country: string;
   category: CircleCategory;
   isPrivate: boolean;
+  coverKey: string | null;
   memberCount: number;
   eventCount: number;
 }): CircleSummary {
@@ -187,7 +182,7 @@ function toSummary(row: {
     country: row.country,
     category: row.category,
     isPrivate: row.isPrivate,
-    coverKey: null,
+    coverKey: row.coverKey,
     memberCount: Number(row.memberCount),
     eventCount: Number(row.eventCount),
   };
