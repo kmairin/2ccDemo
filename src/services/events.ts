@@ -24,6 +24,13 @@ export interface EventSummary {
   startsAt: string;
   endsAt: string;
   capacity: number;
+  /**
+   * The cover photograph's storage key, or null to fall back to the generated
+   * plate. Always null at present: the deployed database refuses every ALTER
+   * TABLE, so the `cover_key` column exists locally but cannot be added to
+   * production. Kept in the shape so the UI is ready when the cover moves onto
+   * the `photos` table, which needs no schema change.
+   */
   coverKey: string | null;
   /** capacity − confirmed bookings, floored at zero. */
   placesLeft: number;
@@ -61,7 +68,6 @@ export interface CalendarDay {
  * `./common`) and touches no database, so this is safe at module scope.
  */
 const summaryColumns = {
-  coverKey: events.coverKey,
   id: events.id,
   slug: events.slug,
   title: events.title,
@@ -86,7 +92,6 @@ type SummaryRow = {
   startsAt: Date;
   endsAt: Date;
   capacity: number;
-  coverKey: string | null;
   confirmed: number;
   circleSlug: string;
   circleName: string;
@@ -103,7 +108,7 @@ function toSummary(row: SummaryRow): EventSummary {
     startsAt: row.startsAt.toISOString(),
     endsAt: row.endsAt.toISOString(),
     capacity: Number(row.capacity),
-    coverKey: row.coverKey,
+    coverKey: null,
     placesLeft: placesLeft(row.capacity, row.confirmed),
     circle: { slug: row.circleSlug, name: row.circleName },
   };
@@ -159,8 +164,7 @@ export async function getEventBySlug(
       ...summaryColumns,
       description: events.description,
       status: events.status,
-    coverKey: events.coverKey,
-      circleId: circles.id,
+        circleId: circles.id,
       circleTagline: circles.tagline,
       circleCity: circles.city,
       circleCountry: circles.country,
