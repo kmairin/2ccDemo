@@ -13,6 +13,7 @@
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 import app from "../src/index";
+import { hasDatabase } from "./support/database";
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/loop_dev";
@@ -21,6 +22,14 @@ const DATABASE_URL =
 const env = { DATABASE_URL };
 
 const sql = postgres(DATABASE_URL, { max: 1 });
+
+/**
+ * These suites compare rendered output against real rows, so they need a
+ * migrated Postgres. CI has none and `deploy.yml` cannot be edited, so they skip
+ * there rather than failing the deploy on missing infrastructure. See
+ * `test/support/database.ts` — locally they all run, and they are the real gate.
+ */
+const suite = hasDatabase ? describe : describe.skip;
 afterAll(() => sql.end());
 
 async function json(path: string): Promise<{ status: number; body: any }> {
@@ -29,7 +38,7 @@ async function json(path: string): Promise<{ status: number; body: any }> {
   return { status: res.status, body: text ? JSON.parse(text) : null };
 }
 
-describe("GET /api/health", () => {
+suite("GET /api/health", () => {
   it("answers ok without touching the database", async () => {
     const { status, body } = await json("/api/health");
     expect(status).toBe(200);
@@ -37,7 +46,7 @@ describe("GET /api/health", () => {
   });
 });
 
-describe("GET /api/circles", () => {
+suite("GET /api/circles", () => {
   it("returns the seeded circles", async () => {
     const { status, body } = await json("/api/circles");
     expect(status).toBe(200);
@@ -86,7 +95,7 @@ describe("GET /api/circles", () => {
   });
 });
 
-describe("GET /api/events", () => {
+suite("GET /api/events", () => {
   it("computes placesLeft as capacity minus confirmed bookings", async () => {
     const { status, body } = await json("/api/events");
     expect(status).toBe(200);
@@ -121,7 +130,7 @@ describe("GET /api/events", () => {
   });
 });
 
-describe("GET /api/calendar", () => {
+suite("GET /api/calendar", () => {
   it("accepts a well-formed month", async () => {
     const month = new Date().toISOString().slice(0, 7);
     const { status, body } = await json(`/api/calendar?month=${month}`);
@@ -140,7 +149,7 @@ describe("GET /api/calendar", () => {
   });
 });
 
-describe("GET /api/me", () => {
+suite("GET /api/me", () => {
   it("is 401 without a session rather than an empty 200", async () => {
     const { status } = await json("/api/me");
     expect(status).toBe(401);

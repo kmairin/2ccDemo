@@ -15,6 +15,7 @@
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 import app from "../src/index";
+import { hasDatabase } from "./support/database";
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/loop_dev";
@@ -23,6 +24,14 @@ const DATABASE_URL =
 const env = { DATABASE_URL };
 
 const sql = postgres(DATABASE_URL, { max: 1 });
+
+/**
+ * These suites compare rendered output against real rows, so they need a
+ * migrated Postgres. CI has none and `deploy.yml` cannot be edited, so they skip
+ * there rather than failing the deploy on missing infrastructure. See
+ * `test/support/database.ts` — locally they all run, and they are the real gate.
+ */
+const suite = hasDatabase ? describe : describe.skip;
 afterAll(async () => {
   await sql`delete from users where email like 'pagetest-%'`;
   await sql.end();
@@ -78,7 +87,7 @@ const PAGES = [
   { path: "/join", subject: "Join" },
 ];
 
-describe("every public page", () => {
+suite("every public page", () => {
   it("answers 200 with HTML", async () => {
     for (const page of PAGES) {
       const { status, res } = await get(page.path);
@@ -116,7 +125,7 @@ describe("every public page", () => {
 
 /* -------------------------------------------------------------- landing */
 
-describe("GET /", () => {
+suite("GET /", () => {
   it("puts the next gatherings above the circles", async () => {
     const { html } = await get("/");
     const gatherings = html.indexOf("The next gatherings");
@@ -151,7 +160,7 @@ describe("GET /", () => {
 
 /* -------------------------------------------------------------- circles */
 
-describe("GET /circles", () => {
+suite("GET /circles", () => {
   it("filters by category and shows nothing from the others", async () => {
     const { status, html } = await get("/circles?category=sailing");
     expect(status).toBe(200);
@@ -185,7 +194,7 @@ describe("GET /circles", () => {
   });
 });
 
-describe("GET /circles/:slug", () => {
+suite("GET /circles/:slug", () => {
   it("404s for a slug nothing answers to", async () => {
     const { status, html } = await get("/circles/not-a-real-circle");
     expect(status).toBe(404);
@@ -263,7 +272,7 @@ describe("GET /circles/:slug", () => {
 
 /* ----------------------------------------------------------- gatherings */
 
-describe("GET /events", () => {
+suite("GET /events", () => {
   it("is a ledger with month headers, soonest first", async () => {
     const { status, html } = await get("/events");
     expect(status).toBe(200);
@@ -290,7 +299,7 @@ describe("GET /events", () => {
   });
 });
 
-describe("GET /events/:slug", () => {
+suite("GET /events/:slug", () => {
   it("404s for a slug nothing answers to", async () => {
     const { status, html } = await get("/events/not-a-real-gathering");
     expect(status).toBe(404);
@@ -342,7 +351,7 @@ describe("GET /events/:slug", () => {
   });
 });
 
-describe("the action area", () => {
+suite("the action area", () => {
   it("signed out: Sign in to reserve, and the join link comes back here", async () => {
     const { html } = await get("/events/first-light-plunge");
     expect(html).toContain("Sign in to reserve");
@@ -408,7 +417,7 @@ describe("the action area", () => {
 
 /* -------------------------------------------------------------- calendar */
 
-describe("GET /calendar", () => {
+suite("GET /calendar", () => {
   it("defaults to this month and carries the param on prev and next", async () => {
     const { status, html } = await get("/calendar");
     expect(status).toBe(200);
@@ -460,7 +469,7 @@ describe("GET /calendar", () => {
 
 /* ------------------------------------------------------------------ join */
 
-describe("GET /join", () => {
+suite("GET /join", () => {
   it("is a bare column with underline inputs and no card", async () => {
     const { html } = await get("/join");
     expect(html).toContain('class="column-420"');
@@ -492,7 +501,7 @@ describe("GET /join", () => {
   });
 });
 
-describe("POST /auth/login", () => {
+suite("POST /auth/login", () => {
   it("signs a new member in and 302s to next", async () => {
     const email = `pagetest-round-trip-${Date.now()}@example.com`;
     const res = await post("/auth/login", {
@@ -569,7 +578,7 @@ describe("POST /auth/login", () => {
   });
 });
 
-describe("POST /auth/logout", () => {
+suite("POST /auth/logout", () => {
   it("302s to the landing page and drops the session", async () => {
     const cookie = await signInAs("leaver");
     const res = await post("/auth/logout", {}, cookie);
@@ -581,7 +590,7 @@ describe("POST /auth/logout", () => {
   });
 });
 
-describe("POST /circles/:slug/join", () => {
+suite("POST /circles/:slug/join", () => {
   it("sends a signed-out visitor to the join form, remembering where they were", async () => {
     const res = await post("/circles/the-cold-room/join", {});
     expect(res.status).toBe(302);
