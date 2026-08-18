@@ -16,7 +16,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "seed": "node scripts/seed.mjs",
-    "e2e": "bash scripts/e2e.sh"
+    "e2e": "bash scripts/e2e.sh",
+    "db:bundle": "node scripts/bootstrap-sql.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

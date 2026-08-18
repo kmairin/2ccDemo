@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import type { DatabaseEnv } from "./db";
+import { ensureSchema } from "./ensure-schema";
 import { createLogger, type LoggerEnv } from "./logger";
 import account from "./routes/account";
+import admin from "./routes/admin";
 import api from "./routes/api";
 import host from "./routes/host";
 import pages from "./routes/pages";
@@ -19,6 +21,26 @@ const app = new Hono<{ Bindings: Bindings }>();
  * Mounted here so the router owns its own paths (`/health` inside becomes
  * `/api/health` outside). It also serves the liveness probe.
  */
+/**
+ * Build the schema on first use if the platform has not. The deploy pipeline
+ * creates no tables, so without this a fresh deployment 500s on every page that
+ * reads data. Skipped for the liveness probe and static assets, which must keep
+ * answering even when the database is unreachable. See src/ensure-schema.ts.
+ */
+app.use("*", async (c, next) => {
+  const path = c.req.path;
+  if (path !== "/api/health" && !path.startsWith("/assets/")) {
+    await ensureSchema(c.env);
+  }
+  await next();
+});
+
+/**
+ * One-time bootstrap for the deployed database. Inert unless ADMIN_TOKEN is set
+ * in the Loop dashboard — see src/routes/admin.ts.
+ */
+app.route("/api/admin", admin);
+
 app.route("/api", api);
 
 /**
