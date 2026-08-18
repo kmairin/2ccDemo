@@ -31,6 +31,71 @@
  */
 import { sql } from "drizzle-orm";
 import { BOOTSTRAP_STATEMENTS, BOOTSTRAP_VERSION } from "./bootstrap-sql";
+
+/**
+ * The statements fall into two halves with different rules.
+ *
+ * SCHEMA — CREATE TABLE, ADD COLUMN, indexes, constraints. Every one is
+ * idempotent, and it must run on EVERY cold start, because a column added after
+ * a database was first built arrives no other way. Gating this behind the seed
+ * version is what left production with a `circles` table that had no
+ * `cover_key` while the code selected one: the version already matched from an
+ * earlier partial rebuild, so the column-adds never ran again and the site
+ * answered 500 on every page that read data.
+ *
+ * DATA — DELETE then INSERT. Expensive and destructive, so only when the seed
+ * genuinely changed.
+ */
+const isDataStatement = (statement: string) => /^(DELETE FROM|INSERT INTO)/i.test(statement);
+
+/**
+ * The deployed database rejects EVERY `ALTER TABLE`.
+ *
+ * Its tables are `schema_locked`, so `ADD COLUMN` comes back with "this schema
+ * change is disallowed because table … is locked", and unlocking needs a
+ * single-statement implicit transaction, which the data service does not give
+ * us. That is also why the primary keys were never added — the probe shows
+ * production carrying CockroachDB's `rowid` stand-in instead.
+ *
+ * Local Postgres has no such lock, which is why this only ever failed in
+ * production. So: never send an ALTER. A column added later arrives by dropping
+ * the table and recreating it, which the version bump already implies.
+ */
+const isAlter = (statement: string) => /^ALTER TABLE/i.test(statement);
+const isCreateTable = (statement: string) => /^CREATE TABLE/i.test(statement);
+
+/**
+ * `ALTER TABLE … SET (schema_locked = …)` is emitted by newer pg_dump and is
+ * rejected by both the deployed database and older Postgres. It does nothing we
+ * need, and 47 guaranteed failures per run bury the ones that matter.
+ */
+const isNoise = (statement: string) => /SET \(schema_locked/i.test(statement);
+/** Safe on every cold start: creates anything absent, changes nothing present. */
+const CREATE_STATEMENTS = BOOTSTRAP_STATEMENTS.filter(
+  (s) => !isDataStatement(s) && !isNoise(s) && !isAlter(s),
+);
+
+/**
+ * A full reset, used only when the seed version changes. Dropping is the only
+ * way a new column reaches this database. Everything here is regenerated from
+ * the seed, so the sole real cost is `sessions` — signed-in visitors are signed
+ * out by a seed change.
+ */
+const TABLES_IN_DROP_ORDER = [
+  "bookings", "passes", "orders", "circle_members", "photos",
+  "events", "packages", "circles", "sessions", "users",
+];
+const DROP_STATEMENTS = TABLES_IN_DROP_ORDER.map(
+  (t) => `DROP TABLE IF EXISTS "public"."${t}" CASCADE`,
+);
+const RESET_STATEMENTS = [
+  ...DROP_STATEMENTS,
+  ...BOOTSTRAP_STATEMENTS.filter((s) => isCreateTable(s) && !isNoise(s)),
+  ...BOOTSTRAP_STATEMENTS.filter(
+    (s) => !isDataStatement(s) && !isNoise(s) && !isAlter(s) && !isCreateTable(s),
+  ),
+];
+const DATA_STATEMENTS = BOOTSTRAP_STATEMENTS.filter(isDataStatement);
 import { batch, getDb, type DatabaseEnv } from "./db";
 import { createLogger, type LoggerEnv } from "./logger";
 
@@ -177,7 +242,11 @@ async function worldExists(env: EnsureEnv): Promise<boolean> {
   return stored === BOOTSTRAP_VERSION;
 }
 
-async function build(env: EnsureEnv): Promise<void> {
+async function build(
+  env: EnsureEnv,
+  statements: readonly string[],
+  { stampVersion = false }: { stampVersion?: boolean } = {},
+): Promise<void> {
   const log = createLogger(env);
   const db = getDb(env);
   let applied = 0;
@@ -200,8 +269,8 @@ async function build(env: EnsureEnv): Promise<void> {
   const CHUNK = 40;
   const asQuery = (statement: string) => ({ toSQL: () => ({ sql: statement, params: [] as unknown[] }) });
 
-  for (let i = 0; i < BOOTSTRAP_STATEMENTS.length; i += CHUNK) {
-    const chunk = BOOTSTRAP_STATEMENTS.slice(i, i + CHUNK);
+  for (let i = 0; i < statements.length; i += CHUNK) {
+    const chunk = statements.slice(i, i + CHUNK);
     try {
       await batch(env, chunk.map(asQuery));
       applied += chunk.length;
@@ -246,6 +315,11 @@ async function build(env: EnsureEnv): Promise<void> {
    * So ask the world instead of counting errors: if the rows are there, the
    * rebuild did its job and this seed is what the database now holds.
    */
+  // Only the DATA pass may stamp the version. The schema pass runs on every
+  // cold start, and stamping there marked the seed as current before the data
+  // had been loaded — so the load was then skipped as already done.
+  if (!stampVersion) return;
+
   try {
     if (await looksPopulated(env)) {
       await writeSeedVersion(env);
@@ -279,8 +353,13 @@ export function ensureSchema(env: EnsureEnv): Promise<void> {
 
   inFlight = (async () => {
     try {
+      // Create anything missing. Never alters what is already there.
+      await build(env, CREATE_STATEMENTS);
       if (await worldExists(env)) return;
-      await build(env);
+      // The seed changed: drop and rebuild, because this database will not
+      // accept an ALTER. Then load the data and stamp the version.
+      await build(env, RESET_STATEMENTS);
+      await build(env, DATA_STATEMENTS, { stampVersion: true });
     } catch (err) {
       // Could not even ask — almost certainly the database being unreachable.
       // Let the request fail normally and allow a later request to retry.
