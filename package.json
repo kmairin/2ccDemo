@@ -14,7 +14,9 @@
     "assets:check": "node scripts/assets-manifest.mjs --check",
     "assets:local": "node scripts/assets-manifest.mjs --seed-local",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "seed": "node scripts/seed.mjs",
+    "e2e": "bash scripts/e2e.sh"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

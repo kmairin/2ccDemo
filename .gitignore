@@ -1,0 +1,18 @@
+# Dependencies — reinstalled from package-lock.json, never committed.
+node_modules/
+
+# Build output from `npm run build` (wrangler --dry-run --outdir dist).
+dist/
+
+# wrangler's local state: the local Postgres shim, the local R2 bucket, caches.
+# Machine-specific and safe to delete.
+.wrangler/
+
+# Environment overrides. Real values never belong in the repo — see AGENTS.md §2.
+.env
+.env.*
+!.env.example
+
+# OS and editor noise.
+.DS_Store
+*.log
