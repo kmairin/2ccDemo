@@ -466,7 +466,7 @@ function PreviewPage() {
       <Section index={10} label="Action area" title="All eight states" id="action-area">
         <div class="grid grid--hair">
           {STATES.map((s) => (
-            <div style="background:var(--ink-900);padding:24px">
+            <div style="background:var(--card);padding:24px">
               <p class="micro" style="margin-block-end:16px">
                 {s.label}
               </p>

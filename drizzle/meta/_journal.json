@@ -15,6 +15,13 @@
       "when": 1787035575597,
       "tag": "0001_kind_veda",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787056803816,
+      "tag": "0002_volatile_bucky",
+      "breakpoints": true
     }
   ]
 }

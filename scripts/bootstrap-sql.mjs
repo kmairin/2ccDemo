@@ -17,8 +17,13 @@
  *
  * Regenerate and commit whenever `src/schema.ts` or `scripts/seed.mjs` changes,
  * or the deployed database will be built from a stale picture.
+ *
+ * The file also carries a `BOOTSTRAP_VERSION` — a hash of the statements — which
+ * is what lets an ALREADY-POPULATED deployed database notice that the seed
+ * changed and rebuild itself. See that constant below, and src/ensure-schema.ts.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 
 const DATABASE_URL =
@@ -81,6 +86,12 @@ const raw = execFileSync(
     // Sessions are per-browser and must not be copied into production.
     // The TABLE still has to exist, so only its DATA is excluded.
     "--exclude-table-data=public.sessions",
+    // `app_meta` is this script's own bookkeeping, not app data. A local
+    // rebuild creates it here too, and dumping it would make the generated
+    // file depend on whether the last local bootstrap had run — which would
+    // change BOOTSTRAP_VERSION without the seed changing at all. The single
+    // definition below is the only one.
+    "--exclude-table=public.app_meta",
     // drizzle-kit's own ledger lives in another schema and is meaningless there.
     "--exclude-schema=drizzle",
     DATABASE_URL,
@@ -185,7 +196,43 @@ const clears = [...TABLE_ORDER]
   // every visitor out on a rebuild.
   .filter((s) => !s.includes('"sessions"'));
 
-const ordered = [...ddlBefore, ...clears, ...orderedInserts, ...ddlAfter];
+/**
+ * The version marker's home.
+ *
+ * FIRST, before the DELETEs, because `ensure-schema.ts` writes the version into
+ * it at the end of a rebuild and the table has to exist by then — and because a
+ * rebuild that half-fails must still leave somewhere to record what happened.
+ *
+ * It is deliberately NOT in TABLE_ORDER, so `clears` never empties it: the row
+ * it holds is the record of which seed the database was built from, and wiping
+ * that on every rebuild would defeat the whole point.
+ *
+ * Plain SQL, no `DO $$ … $$`: the deployed database is CockroachDB and has no
+ * PL/pgSQL.
+ */
+const APP_META_DDL =
+  'CREATE TABLE IF NOT EXISTS "public"."app_meta" ("key" text PRIMARY KEY, "value" text NOT NULL)';
+
+const ordered = [APP_META_DDL, ...ddlBefore, ...clears, ...orderedInserts, ...ddlAfter];
+
+/**
+ * A fingerprint of everything above.
+ *
+ * WHY THIS EXISTS. `ensure-schema.ts` used to rebuild only when the world
+ * looked *unbuilt* — no circles table, no rows, duplicate ids. That check
+ * cannot see a change to the SEED. When every circle and gathering gained a
+ * `cover_key` and 123 gallery rows gained an `object_key`, production was
+ * already populated, so the rebuild never fired and the live site kept serving
+ * the old photo-less rows no matter how many times it was deployed.
+ *
+ * The app stores this string in `app_meta.seed_version` after a rebuild and
+ * compares it on the next boot. Change a single byte of the seed or the schema
+ * and the hash moves, so the next deploy rebuilds exactly once and then stops.
+ */
+export const BOOTSTRAP_VERSION = createHash("sha256")
+  .update(ordered.join("\n"))
+  .digest("hex")
+  .slice(0, 12);
 
 const kinds = {};
 for (const s of ordered) {
@@ -203,13 +250,24 @@ const body = `/**
  * Regenerate after any change to src/schema.ts or scripts/seed.mjs.
  */
 
+/**
+ * Fingerprint of the statements below — SHA-256 of the joined array, first 12
+ * hex characters.
+ *
+ * \`ensure-schema.ts\` stores this in \`app_meta.seed_version\` after a rebuild and
+ * refuses to call the world "already built" until the stored value matches. A
+ * seed change therefore rebuilds a populated database exactly once, instead of
+ * being invisible to it. See scripts/bootstrap-sql.mjs.
+ */
+export const BOOTSTRAP_VERSION = ${JSON.stringify(BOOTSTRAP_VERSION)};
+
 /** ${ordered.length} statements: ${Object.entries(kinds).map(([k, v]) => `${v} ${k}`).join(", ")}. */
 export const BOOTSTRAP_STATEMENTS: readonly string[] = ${JSON.stringify(ordered, null, 0)};
 `;
 
 writeFileSync("src/bootstrap-sql.ts", body);
 console.log(
-  `src/bootstrap-sql.ts: ${ordered.length} statements, ${(body.length / 1024).toFixed(0)} KB`,
+  `src/bootstrap-sql.ts: ${ordered.length} statements, ${(body.length / 1024).toFixed(0)} KB, version ${BOOTSTRAP_VERSION}`,
 );
 for (const [k, v] of Object.entries(kinds).sort((a, b) => b[1] - a[1])) {
   console.log(`  ${String(v).padStart(4)}  ${k}`);

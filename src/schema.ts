@@ -137,6 +137,12 @@ export const circles = pgTable(
       .references(() => users.id),
     /** True means joining needs the host's approval before it counts. */
     isPrivate: boolean("is_private").notNull().default(false),
+    /**
+     * The cover photograph, as a key under `design/assets/` — e.g.
+     * `photos/cold-aspen/01.jpg`. Null falls back to the generated plate, so the
+     * app works with or without photography.
+     */
+    coverKey: text("cover_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -206,6 +212,12 @@ export const events = pgTable(
     endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     capacity: integer("capacity").notNull(),
     status: text("status", { enum: EVENT_STATUSES }).notNull().default("published"),
+    /**
+     * The cover photograph, as a key under `design/assets/` — e.g.
+     * `photos/cold-aspen/03.jpg`. Null falls back to the generated plate, so the
+     * app works with or without photography.
+     */
+    coverKey: text("cover_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

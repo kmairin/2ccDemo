@@ -288,7 +288,7 @@ pages.get("/", async (c) => {
           <CardGrid wide={true}>
             {next.map((e) => (
               <EventCard
-                slug={e.slug}
+                slug={e.slug} coverKey={e.coverKey}
                 title={e.title}
                 circleName={e.circle.name}
                 city={e.city}
@@ -310,7 +310,7 @@ pages.get("/", async (c) => {
         <CardGrid>
           {circles.map((circle) => (
             <CircleCard
-              slug={circle.slug}
+              slug={circle.slug} coverKey={circle.coverKey}
               name={circle.name}
               tagline={circle.tagline}
               city={circle.city}
@@ -429,7 +429,7 @@ pages.get("/circles", async (c) => {
           <CardGrid>
             {circles.map((circle) => (
               <CircleCard
-                slug={circle.slug}
+                slug={circle.slug} coverKey={circle.coverKey}
                 name={circle.name}
                 tagline={circle.tagline}
                 city={circle.city}
@@ -592,7 +592,9 @@ pages.get("/circles/:slug", async (c) => {
     >
       <FlashBanner flash={flash} />
 
-      {/* §5: full-bleed plate, the name overlapping its lower edge. */}
+      {/* §5: full-bleed cover, the name overlapping its lower edge. The
+          photograph leads; the plate is what a circle without one falls back
+          to (§11). */}
       <section class="section">
         <Container>
           <div class="grid--bleed">
@@ -602,6 +604,8 @@ pages.get("/circles/:slug", async (c) => {
               monogram={initials(circle.name)}
               shape="hero"
               density="hero"
+              objectKey={circle.coverKey}
+              alt={circle.name}
             />
           </div>
           <div class="eight">
@@ -668,7 +672,7 @@ pages.get("/circles/:slug", async (c) => {
           <CardGrid wide={true}>
             {nextDates.map((e) => (
               <EventCard
-                slug={e.slug}
+                slug={e.slug} coverKey={e.coverKey}
                 title={e.title}
                 circleName={circle.name}
                 city={e.city}
@@ -750,6 +754,7 @@ function toLedgerGroups(events: EventSummary[]): LedgerGroup[] {
       monthLabel,
       timeLabel: formatTime(start),
       placesLeft: e.placesLeft,
+      coverKey: e.coverKey,
     });
   }
   return groups;
@@ -1009,6 +1014,8 @@ pages.get("/events/:slug", async (c) => {
                   rule={true}
                   shape="hero"
                   density="hero"
+                  objectKey={event.coverKey}
+                  alt={event.title}
                 />
               </div>
               <h1 class="h-page" style="margin-top:-.4em;position:relative">
@@ -1037,10 +1044,10 @@ pages.get("/events/:slug", async (c) => {
                   </dd>
                 </div>
                 <div>
-                  {/* The one large brass number in the product (§5). It goes on
-                      a span rather than the `dd`, because `.deflist dd` is one
-                      class plus one type and would out-specify `.places-left`
-                      and repaint the number `--ivory-2`. */}
+                  {/* The one large accent number in the product (§5). It goes
+                      on a span rather than the `dd`, because `.deflist dd` is
+                      one class plus one type and would out-specify
+                      `.places-left` and repaint the number `--ink-2`. */}
                   <dt class="micro">Places left</dt>
                   <dd>
                     <span class="places-left">{event.placesLeft}</span>

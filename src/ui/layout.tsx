@@ -16,7 +16,7 @@
 import { raw } from "hono/html";
 import type { Child } from "hono/jsx";
 import { Avatar } from "./components";
-import { css, escScript, fontsHref } from "./theme";
+import { css, escScript, fontsHref, pageColor } from "./theme";
 
 /** Emitted ahead of `<html>` so `c.html(<Layout …/>)` is a complete document. */
 const DOCTYPE = raw("<!doctype html>");
@@ -73,8 +73,13 @@ export function Layout(props: LayoutProps) {
           {/* Without viewport-fit=cover every env(safe-area-inset-*) silently
               returns 0, and the action bar sits under the home indicator. */}
           <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-          <meta name="color-scheme" content="dark" />
-          <meta name="theme-color" content="#0A0A0B" />
+          {/* Both themes ship, so form controls and scrollbars are told so.
+              The two theme-colors cover the no-cookie case; when a visitor has
+              chosen explicitly, the middleware in src/index.ts collapses them
+              to the one that is actually rendering. */}
+          <meta name="color-scheme" content="light dark" />
+          <meta name="theme-color" content={pageColor.light} media="(prefers-color-scheme: light)" />
+          <meta name="theme-color" content={pageColor.dark} media="(prefers-color-scheme: dark)" />
           <title>{`${title} · 2CC`}</title>
           <meta
             name="description"
@@ -82,16 +87,20 @@ export function Layout(props: LayoutProps) {
           />
           {/* An inline monogram mark. Without an icon the browser requests
               /favicon.ico and logs a 404 on every page — one console error is
-              one too many, and there is no image file to serve. */}
+              one too many, and there is no image file to serve.
+
+              It stays an ink tile in both themes: a favicon cannot follow the
+              page, and a mark that changed colour under the visitor would read
+              as a different site rather than as a preference. */}
           <link
             rel="icon"
             href={
               "data:image/svg+xml," +
               encodeURIComponent(
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
-                  '<rect width="32" height="32" fill="#0A0A0B"/>' +
+                  '<rect width="32" height="32" fill="#14130F"/>' +
                   '<text x="16" y="22" text-anchor="middle" font-family="Georgia,serif" ' +
-                  'font-size="15" fill="#AE9463">2C</text></svg>',
+                  'font-size="15" fill="#C6A87A">2C</text></svg>',
               )
             }
           />
@@ -143,6 +152,20 @@ export function Layout(props: LayoutProps) {
                 )}
               </nav>
 
+              {/* Sign-in must be visible without opening anything. Buried in the
+                  disclosure, the only control on a phone was "Menu", and the way
+                  in to the whole product was invisible. */}
+              <div class="nav-mobile-actions">
+                {signedIn ? (
+                  <a class="nav-link" href="/account" aria-label={`Account, ${accountLabel}`}>
+                    <Avatar name={user.name} />
+                  </a>
+                ) : (
+                  <a class="btn btn--primary btn--compact" href="/join">
+                    Sign in
+                  </a>
+                )}
+              </div>
               <details class="nav-mobile">
                 <summary>Menu</summary>
                 <nav class="nav-panel" aria-label="Primary">
@@ -182,6 +205,34 @@ export function Layout(props: LayoutProps) {
               <a class="footer-link" href="/calendar">
                 Calendar
               </a>
+              {/* Two words and a rule, not a switch widget. It posts, so it
+                  works with scripting off; which of the two is live is decided
+                  in CSS from `data-theme` and `prefers-color-scheme`, so this
+                  markup is the same on every page. `POST /theme` sends the
+                  visitor back to the page they were on. */}
+              <form class="theme-switch" method="post" action="/theme">
+                <span class="theme-switch-label" id="theme-switch-label">
+                  Theme
+                </span>
+                <button
+                  class="theme-btn"
+                  type="submit"
+                  name="theme"
+                  value="light"
+                  aria-describedby="theme-switch-label"
+                >
+                  Light
+                </button>
+                <button
+                  class="theme-btn"
+                  type="submit"
+                  name="theme"
+                  value="dark"
+                  aria-describedby="theme-switch-label"
+                >
+                  Dark
+                </button>
+              </form>
             </div>
           </footer>
 

@@ -9,7 +9,44 @@
 //
 // Add a file to design/assets/, run `npm run assets`, and commit both.
 
-export const assets = {} as const;
+export const assets = {
+  "photos/art-bangkok/01.jpg": "/assets/photos/art-bangkok/01.jpg",
+  "photos/art-bangkok/02.jpg": "/assets/photos/art-bangkok/02.jpg",
+  "photos/art-bangkok/03.jpg": "/assets/photos/art-bangkok/03.jpg",
+  "photos/art-bangkok/04.jpg": "/assets/photos/art-bangkok/04.jpg",
+  "photos/art-bangkok/05.jpg": "/assets/photos/art-bangkok/05.jpg",
+  "photos/art-bangkok/06.jpg": "/assets/photos/art-bangkok/06.jpg",
+  "photos/cold-aspen/01.jpg": "/assets/photos/cold-aspen/01.jpg",
+  "photos/cold-aspen/02.jpg": "/assets/photos/cold-aspen/02.jpg",
+  "photos/cold-aspen/03.jpg": "/assets/photos/cold-aspen/03.jpg",
+  "photos/cold-aspen/04.jpg": "/assets/photos/cold-aspen/04.jpg",
+  "photos/cold-aspen/05.jpg": "/assets/photos/cold-aspen/05.jpg",
+  "photos/cold-aspen/06.jpg": "/assets/photos/cold-aspen/06.jpg",
+  "photos/dining-lisbon/01.jpg": "/assets/photos/dining-lisbon/01.jpg",
+  "photos/dining-lisbon/02.jpg": "/assets/photos/dining-lisbon/02.jpg",
+  "photos/dining-lisbon/03.jpg": "/assets/photos/dining-lisbon/03.jpg",
+  "photos/dining-lisbon/04.jpg": "/assets/photos/dining-lisbon/04.jpg",
+  "photos/dining-lisbon/05.jpg": "/assets/photos/dining-lisbon/05.jpg",
+  "photos/dining-lisbon/06.jpg": "/assets/photos/dining-lisbon/06.jpg",
+  "photos/padel-dubai/01.jpg": "/assets/photos/padel-dubai/01.jpg",
+  "photos/padel-dubai/02.jpg": "/assets/photos/padel-dubai/02.jpg",
+  "photos/padel-dubai/03.jpg": "/assets/photos/padel-dubai/03.jpg",
+  "photos/padel-dubai/04.jpg": "/assets/photos/padel-dubai/04.jpg",
+  "photos/padel-dubai/05.jpg": "/assets/photos/padel-dubai/05.jpg",
+  "photos/padel-dubai/06.jpg": "/assets/photos/padel-dubai/06.jpg",
+  "photos/sailing-ibiza/01.jpg": "/assets/photos/sailing-ibiza/01.jpg",
+  "photos/sailing-ibiza/02.jpg": "/assets/photos/sailing-ibiza/02.jpg",
+  "photos/sailing-ibiza/03.jpg": "/assets/photos/sailing-ibiza/03.jpg",
+  "photos/sailing-ibiza/04.jpg": "/assets/photos/sailing-ibiza/04.jpg",
+  "photos/sailing-ibiza/05.jpg": "/assets/photos/sailing-ibiza/05.jpg",
+  "photos/sailing-ibiza/06.jpg": "/assets/photos/sailing-ibiza/06.jpg",
+  "photos/sailing-monaco/01.jpg": "/assets/photos/sailing-monaco/01.jpg",
+  "photos/sailing-monaco/02.jpg": "/assets/photos/sailing-monaco/02.jpg",
+  "photos/sailing-monaco/03.jpg": "/assets/photos/sailing-monaco/03.jpg",
+  "photos/sailing-monaco/04.jpg": "/assets/photos/sailing-monaco/04.jpg",
+  "photos/sailing-monaco/05.jpg": "/assets/photos/sailing-monaco/05.jpg",
+  "photos/sailing-monaco/06.jpg": "/assets/photos/sailing-monaco/06.jpg",
+} as const;
 
 /** Every asset path available to this app, e.g. `"logo.svg"` or `"icons/cart.svg"`. */
 export type AssetPath = keyof typeof assets;

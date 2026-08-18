@@ -1,9 +1,9 @@
 /**
  * The photo strip (`design/reference/api-contract.md`, Scope addition §A).
  *
- * There is no photography and none can be obtained, so the gallery is a strip
- * of generated plates presented as an archive rather than as fake photographs.
- * The captions do the work the photographs would.
+ * A strip of the circle's or the gathering's photographs, captioned. A record
+ * whose photo has no `objectKey` falls back to a generated plate in the same
+ * frame, so a partly-photographed strip still reads as one set.
  *
  * No JS carousel, no dots, no arrows: it is a scroll container with CSS
  * snapping. `tabindex="0"` plus `role="group"` makes it a focusable region, so
@@ -18,9 +18,8 @@ export type GalleryItem = {
   /** Drives this item's own guilloché parameters — one per photo, not one per circle. */
   seed: string;
   /**
-   * An R2 key. Null (the normal case today) renders a generated plate; set it
-   * and `Plate` renders `<img src="/assets/…">` instead. That is the upgrade
-   * path for real photographs — see `PlateProps.objectKey`.
+   * An R2 key. Set (the normal case) renders `<img src="/assets/…">`; null
+   * falls back to a generated plate — see `PlateProps.objectKey`.
    */
   objectKey?: string | null;
 };

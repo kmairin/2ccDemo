@@ -239,7 +239,10 @@ export function plateSvg(seed: string, category = "", opts: PlateSvgOptions = {}
   return (
     `<svg class="plate-engraving" data-category="${cat}" viewBox="0 0 100 100"` +
     ` preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">` +
-    `<path d="${d}" transform="rotate(${rotate} 50 50)" fill="none" stroke="var(--brass)"` +
+    // `opacity` here is a presentation attribute, so `theme.ts` can override it
+    // per theme with `--engrave-opacity` and still leave a sane value in the
+    // markup: paper needs a firmer line than lit black does.
+    `<path d="${d}" transform="rotate(${rotate} 50 50)" fill="none" stroke="var(--accent)"` +
     ` stroke-width=".5" stroke-linejoin="round" vector-effect="non-scaling-stroke" opacity=".22"/>` +
     `</svg>`
   );

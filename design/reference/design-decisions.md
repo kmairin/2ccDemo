@@ -423,3 +423,140 @@ epitrochoid — a circle with a 6% ripple — which rendered as one faint stray
 outline, the exact sparse failure §1 bans. Formula, the four hashed parameters,
 stroke, opacity, pass count and 3° step are unchanged; only how far `t` runs.
 On budget at 6.1–9.8KB per grid plate.
+
+---
+
+## 11. Light, and photographs — §0, §1 and §2 are overturned
+
+§0–§2 answered one question: **"how do we look expensive with zero
+photography?"** Near-black plus brass, and a generated engraved plate as the
+hero, were good answers to it. There are now **36 real photographs** in
+`design/assets/photos/`, wired to every circle and every gathering, so the
+question no longer exists and neither does the answer.
+
+**Everything else in this file stands unchanged** — the type system (§3),
+spacing and composition (§4), the per-screen moves (§5), the copy law (§6), the
+ban list (§7), the credibility checklist (§8) and every measured correction in
+§10.
+
+### 11.1 Light is the default. Dark ships as the alternative.
+
+Both themes are complete and a visitor can switch between them. The tokens are
+declared in three layers, in this order, and the order is the whole mechanism:
+
+```css
+:root { /* the full LIGHT palette — every token defined here */ }
+@media (prefers-color-scheme:dark) { :root:not([data-theme="light"]) { /* dark */ } }
+:root[data-theme="dark"] { /* dark again, so an explicit choice wins */ }
+```
+
+No colour has its only definition inside a media query, so no token can come out
+unset. `<body>` gets an explicit `background:var(--paper)`.
+
+The choice lives in a `2cc_theme` cookie (`light` | `dark`, `Path=/`,
+`SameSite=Lax`, one year, not `HttpOnly` — it is a display preference, not a
+credential) and is applied **on the server**: middleware in `src/index.ts`
+stamps `<html data-theme="…">` from the cookie. **No cookie means no attribute**,
+which is what lets `prefers-color-scheme` decide for someone who has never
+touched the switch. Because the attribute is in the markup, there is no flash of
+the wrong theme and no blocking inline script to prevent one.
+
+The control is a footer form posting to `POST /theme` (`src/routes/theme.ts`):
+two plain submit buttons, `Light` and `Dark`, drawn as the filter row is —
+micro-caps on a hairline, the live one marked by a 1px accent underline. No
+icon, no emoji, no pill, no script. Which one is live is decided **in CSS**, by
+the same three layers, so no page has to know the current theme.
+
+### 11.2 Tokens — final, both themes, measured
+
+| Token | Light | worst measured | Dark | worst measured |
+| --- | --- | --- | --- | --- |
+| `--paper` | `#FBFAF8` | page | `#0A0A0B` | page |
+| `--paper-2` | `#F4F1EC` | raised / hover | `#141416` | raised / hover |
+| `--card` | `#FFFFFF` | card | `#101012` | card |
+| `--ink` | `#14130F` | **16.50:1** | `#F4EFE7` | **16.07:1** |
+| `--ink-2` | `#4A4741` | **8.22:1** | `#CFC8BC` | **11.08:1** |
+| `--ink-3` | `#5E5A54` | **6.08:1** | `#A9A399` | **7.35:1** |
+| `--ink-faint` | `#6E6A64` | **4.77:1** | `#8A857D` | **5.02:1** |
+| `--accent` | `#7A5C2E` | **5.49:1** | `#AE9463` | **6.32:1** |
+| `--accent-2` | `#5C4522` | **8.00:1** | `#D8C39A` | **10.68:1** |
+| `--slate` | `#55606D` | **5.68:1** | `#8A94A0` | **5.98:1** |
+| `--rust` | `#8E4A32` | **5.87:1** | `#B0745B` | **4.81:1** |
+| `--warn` | `#8A4B18` | **6.01:1** | `#D98A6A` | **6.83:1** |
+| `--line` | `rgba(20,19,15,.12)` | decorative only | `rgba(244,239,231,.08)` | decorative only |
+| `--line-strong` | `rgba(20,19,15,.46)` | **3.02:1** | `rgba(244,239,231,.40)` | **3.46:1** |
+
+"Worst measured" is the lowest of the three backgrounds a token can sit on
+(`--paper`, `--paper-2`, `--card`), computed with the WCAG sRGB formula.
+Everything clears AA body (4.5:1); `--line-strong` clears SC 1.4.11 (3:1).
+
+**`--line-strong` had to move.** The proposed light value `rgba(20,19,15,.32)`
+composites to **2.08:1** on paper — it fails, exactly as three dark tokens did
+in §10.2. `.46` is the first alpha that clears 3:1 on all three grounds.
+
+The four dark tokens `--ink-950/900/850/800` and the `--ivory*`/`--brass*`
+families are gone as names. Every colour is now semantic — `--paper`, `--card`,
+`--ink*`, `--accent*` — because a token called `--ivory` holding `#14130F` is a
+lie. The `.micro--brass`, `.status--brass`, `.stat--brass` and `.alert--brass`
+**class** names are deliberately unchanged, so no route file had to be edited.
+
+### 11.3 What carries "expensive" now that brass-on-black does not
+
+Brass on near-black was the luxury signal, and on paper it would be weak.
+Replaced by three things, in order of how much work they do:
+
+1. **The photographs**, at the largest size on every surface. Full-bleed past
+   the gutters at 375, 21/9 on detail heroes, and a 64px square on every ledger
+   row that used to carry a monogram.
+2. **Whitespace, unchanged.** §4's 8-of-12 cap, the `clamp(64px,12vw,144px)`
+   bands and the ~55% unfilled target are worth more on paper than on ink,
+   because empty white is read as confidence and empty black is read as empty.
+3. **Type contrast.** `#14130F` on `#FBFAF8` measures **17.82:1**, slightly
+   *higher* than the dark theme's ivory-on-black 17.29:1. The Fraunces Didone at
+   `--t-hero` against that much white is the single most expensive-looking thing
+   on the page.
+
+`--accent` (`#7A5C2E`, a dark umber) keeps brass's exact permissions and exact
+bans from §2: 1px rules, ≤11px uppercase labels, prices and credit numerals,
+hover underlines, the focus ring, the guilloché stroke — and **never** a fill,
+a badge, a chip, a gradient, an icon, body text or a headline. The one primary
+CTA per screen inverts with the theme: `--ink` fill, `--paper` text.
+
+### 11.4 The plate is the fallback, not the hero
+
+`Plate` renders `<img class="plate-photo">` when `objectKey` is set and the
+generated plate when it is null. That is now the normal case and the exception
+respectively. All five §1 layers survive, driven from tokens so they follow the
+theme:
+
+- **Ground** — `radial-gradient(120% 90% at var(--ox) 14%, …)` over
+  `--plate-1/2/3`: lit black in dark, toned paper stock (`#FFFFFF → #F2EEE7 →
+  #E7E1D7`) in light.
+- **Wash** — the five category hexes are unchanged, but the blend flips.
+  `screen` cannot darken paper, so light uses `multiply`. Measured the same way
+  §10.5 was: **28 levels of darkening, spread 6 between categories** — the same
+  band as dark's `screen @ .14` (lift 12, spread 6), in the other direction.
+- **Monogram** — still the plate's subject, still debossed, with the highlight
+  and shadow swapped for paper.
+- **Guilloché** — `stroke:var(--accent)`, and the opacity moved from the SVG
+  attribute to `--engrave-opacity` (`.22` dark, `.30` light) because a brown
+  hairline on paper needs more weight than a brass one on black.
+- **Light** — the dark-only `inset 0 1px 0 rgba(244,239,231,.06)` top edge is
+  gone from both themes, on cards as well as plates.
+
+**Photographs get their own treatment**, `.plate--photo`: `--paper-2` behind the
+image, and an overlay drawing `inset 0 0 0 1px var(--photo-edge)` plus a
+`44px -22px` vignette. Without it a pale sky or a white tablecloth bleeds into
+the paper and the card loses its edge. It is an overlay, not an inset shadow on
+the wrapper, because an inset shadow paints *under* the `<img>`.
+
+### 11.5 Deleted, not inverted
+
+- **The global film grain** (`body::after`, `feTurbulence`, `mix-blend-mode:
+  overlay`) — it gave a photograph-free product a printed surface; over real
+  photographs it is a dirty screen, and it was the only thing in the product
+  painted at `z-index:9999`.
+- **The lit inset highlights** — `inset 0 1px 0 rgba(244,239,231,.05)` on
+  `.card` and `.06` on `.plate` and `.ticket`.
+- The product's **one** drop shadow still exists and is still only on the sticky
+  header; it is now `--shadow-header` and is far lighter on paper.

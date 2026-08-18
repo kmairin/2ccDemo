@@ -3,40 +3,172 @@
  *
  * Built to `design/reference/design-decisions.md`. That file is the spec and it
  * wins over everything; §10 carries measured corrections that override §2, and
- * the corrected values are the ones below.
+ * §11 records the light-first turn this file now implements.
  *
  * Inlined into every page by `src/ui/layout.tsx` — there is no build step and
  * no CSS file to keep in sync, so the document arrives styled in one round
- * trip. Dark only, by design: there is no light theme and no
- * `prefers-color-scheme` branch to add one.
+ * trip.
+ *
+ * **Two themes, light by default.** The premise in §0–§2 was "look expensive
+ * with zero photography", and near-black plus brass was the answer to that
+ * question. There are photographs now, so paper leads: photographs read better
+ * on white, the plate is demoted to a fallback, and the dark palette survives
+ * as the alternative rather than as the design.
+ *
+ * The cascade is three layers and the order matters (§11):
+ *   1. `:root`                                        — the full LIGHT palette.
+ *   2. `@media (prefers-color-scheme:dark) :root:not([data-theme="light"])`
+ *   3. `:root[data-theme="dark"]`                     — so the toggle wins.
+ * Every colour is defined at layer 1. Nothing has its only definition inside a
+ * media query, so a token can never come out unset.
+ *
+ * `data-theme` is stamped server-side from the `2cc_theme` cookie
+ * (`src/routes/theme.ts`), which is why there is no flash of the wrong theme
+ * and no blocking inline script.
  *
  * Mobile-first. Everything is written for 375px and widens from there; anything
  * that could be wider than its column wraps or scrolls inside its own box
  * rather than pushing the page sideways (§10.4).
  */
 
-/** The palette, for anywhere CSS custom properties cannot reach. §10.2 values. */
-export const tokens = {
-  ink950: "#0A0A0B",
-  ink900: "#101012",
-  ink850: "#141416",
-  ink800: "#17171A",
-  ink700: "#1F1F23",
+/**
+ * The page background of each theme, for the places CSS custom properties
+ * cannot reach — `<meta name="theme-color">` in the document head.
+ */
+export const pageColor = { light: "#FBFAF8", dark: "#0A0A0B" } as const;
+
+/**
+ * The light palette — the default.
+ *
+ * Every text value is measured against all three backgrounds it can sit on
+ * (`--paper`, `--paper-2`, `--card`); the worst case is the number in the
+ * comment. AA is 4.5:1 for body, 3:1 for large text and control boundaries.
+ *
+ * `--line-strong` is the one that had to move: at the proposed `.32` it
+ * composites to 2.08:1 on paper, which fails SC 1.4.11 for anything that is
+ * the only boundary of a control. `.46` measures 3.02:1 worst case.
+ */
+const light = {
+  /**
+   * Which way the browser paints the things CSS does not own — native
+   * radios, checkboxes, scrollbars. It has to be a per-theme value, not the
+   * `light dark` in the meta tag: that only declares support, and the UA then
+   * follows the SYSTEM preference. Measured on /host with an explicit light
+   * cookie and a dark system preference, every unchecked radio came back with
+   * `color: rgb(255,255,255)` and rendered as a filled dark disc on paper.
+   */
+  colorScheme: "light",
+  paper: "#FBFAF8",
+  paper2: "#F4F1EC",
+  card: "#FFFFFF",
+  line: "rgba(20,19,15,.12)",
+  lineMid: "rgba(20,19,15,.20)",
+  /** Mandatory on any boundary that is the only thing defining a control. 3.02:1. */
+  lineStrong: "rgba(20,19,15,.46)",
+  ink: "#14130F", //     16.50:1
+  ink2: "#4A4741", //     8.22:1
+  ink3: "#5E5A54", //     6.08:1
+  inkFaint: "#6E6A64", // 4.77:1
+  accent: "#7A5C2E", //   5.49:1
+  accent2: "#5C4522", //  8.00:1
+  accentHair: "rgba(122,92,46,.34)",
+  slate: "#55606D", //    5.68:1
+  rust: "#8E4A32", //     5.87:1
+  warn: "#8A4B18", //     6.01:1
+  selection: "rgba(122,92,46,.20)",
+  /** The plate fallback, as toned paper stock rather than as lit black. */
+  plate1: "#FFFFFF",
+  plate2: "#F2EEE7",
+  plate3: "#E7E1D7",
+  plateMono: "#EAE4D9",
+  plateMonoStroke: "rgba(122,92,46,.34)",
+  plateEmboss: "0 1px 0 rgba(255,255,255,.9), 0 -1px 0 rgba(20,19,15,.10)",
+  plateInset: "inset 0 0 0 1px rgba(20,19,15,.10)",
+  /** `screen` cannot tint paper; `multiply` at .14 lifts 28 levels, spread 6. */
+  washBlend: "multiply",
+  washAlpha: ".14",
+  engraveOpacity: ".30",
+  /** Hairline plus a whisper of vignette so a pale photograph keeps its edge. */
+  photoEdge: "rgba(20,19,15,.16)",
+  photoVignette: "inset 0 0 44px -22px rgba(20,19,15,.34)",
+  /** The foot a hero photograph fades to, so the overlapping h1 stays legible. */
+  photoFoot: "rgba(251,250,248,.97)",
+  /** The product's one drop shadow, on the sticky header. */
+  shadowHeader: "0 18px 32px -30px rgba(20,19,15,.45)",
+  shadowBar: "0 -12px 32px -18px rgba(20,19,15,.30)",
+};
+
+/**
+ * The property list every palette has to fill. The light object above defines
+ * it, so a token added there without a dark counterpart is a typecheck error
+ * rather than a colour that silently comes out unset in one theme.
+ */
+type Palette = typeof light;
+
+/**
+ * The dark palette — the alternative, not the default.
+ *
+ * These are §10.2's measured values, unchanged: they were computed against
+ * `#0A0A0B` and they pass. The only dark things deleted are the ones that only
+ * ever made sense in the dark — the global film grain and the lit inset
+ * highlights on cards.
+ */
+const dark: Palette = {
+  colorScheme: "dark",
+  paper: "#0A0A0B",
+  paper2: "#141416",
+  card: "#101012",
   line: "rgba(244,239,231,.08)",
-  lineLit: "rgba(244,239,231,.16)",
-  /** Mandatory on any boundary that is the only thing defining a control (§10.2). */
+  lineMid: "rgba(244,239,231,.16)",
+  /** 3.46:1 — the only alpha that clears SC 1.4.11 on this ground (§10.2). */
   lineStrong: "rgba(244,239,231,.40)",
-  ivory: "#F4EFE7",
-  ivory2: "#CFC8BC",
-  ivoryDim: "#A9A399",
-  ivoryFaint: "#8A857D",
-  brass: "#AE9463",
-  brassLit: "#D8C39A",
-  brassHair: "rgba(174,148,99,.30)",
-  slate: "#8A94A0",
-  rust: "#B0745B",
-  warn: "#D98A6A",
-} as const;
+  ink: "#F4EFE7", //     16.07:1
+  ink2: "#CFC8BC", //    11.08:1
+  ink3: "#A9A399", //     7.35:1
+  inkFaint: "#8A857D", // 5.02:1
+  accent: "#AE9463", //   6.32:1
+  accent2: "#D8C39A", // 10.68:1
+  accentHair: "rgba(174,148,99,.30)",
+  slate: "#8A94A0", //    5.98:1
+  rust: "#B0745B", //     4.81:1
+  warn: "#D98A6A", //     6.83:1
+  selection: "rgba(174,148,99,.28)",
+  plate1: "#1B1A1D",
+  plate2: "#0E0E10",
+  plate3: "#0A0A0B",
+  plateMono: "#17171A",
+  plateMonoStroke: "rgba(174,148,99,.35)",
+  plateEmboss: "0 1px 0 rgba(244,239,231,.05), 0 -1px 0 rgba(0,0,0,.6)",
+  plateInset: "inset 0 -90px 70px -70px #0A0A0B",
+  /** §10.5: soft-light is invisible on near-black; screen at .14 lifts 12, spread 6. */
+  washBlend: "screen",
+  washAlpha: ".14",
+  engraveOpacity: ".22",
+  photoEdge: "rgba(244,239,231,.14)",
+  photoVignette: "inset 0 0 44px -22px rgba(0,0,0,.55)",
+  photoFoot: "rgba(10,10,11,.97)",
+  shadowHeader: "0 24px 48px -24px rgba(0,0,0,.8)",
+  shadowBar: "0 -12px 32px rgba(0,0,0,.45)",
+};
+
+/** The colour half of `:root` — the same property list for either palette. */
+function palette(p: Palette): string {
+  return `
+  color-scheme:${p.colorScheme};
+  --paper:${p.paper}; --paper-2:${p.paper2}; --card:${p.card};
+  --line:${p.line}; --line-mid:${p.lineMid}; --line-strong:${p.lineStrong};
+  --ink:${p.ink}; --ink-2:${p.ink2}; --ink-3:${p.ink3}; --ink-faint:${p.inkFaint};
+  --accent:${p.accent}; --accent-2:${p.accent2}; --accent-hair:${p.accentHair};
+  --slate:${p.slate}; --rust:${p.rust}; --warn:${p.warn};
+  --selection:${p.selection};
+  --plate-1:${p.plate1}; --plate-2:${p.plate2}; --plate-3:${p.plate3};
+  --plate-mono-fill:${p.plateMono}; --plate-mono-stroke:${p.plateMonoStroke};
+  --plate-emboss:${p.plateEmboss}; --plate-inset:${p.plateInset};
+  --wash-blend:${p.washBlend}; --wash-alpha:${p.washAlpha};
+  --engrave-opacity:${p.engraveOpacity};
+  --photo-edge:${p.photoEdge}; --photo-vignette:${p.photoVignette}; --photo-foot:${p.photoFoot};
+  --shadow-header:${p.shadowHeader}; --shadow-bar:${p.shadowBar};`;
+}
 
 /**
  * Fraunces with its axes exposed so §3 can lock them: default Fraunces is
@@ -51,28 +183,6 @@ export const fontsHref =
   "&display=swap";
 
 /**
- * The grain, baked once to a 160px tiling data-URI (§1).
- *
- * Global, on `body::after` — never per plate. One printed surface across the
- * whole viewport. Above `.05` opacity it reads as a broken JPEG.
- */
-function grainUri(): string {
-  const svg =
-    "<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'>" +
-    "<filter id='g'>" +
-    "<feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/>" +
-    "<feColorMatrix type='saturate' values='0'/>" +
-    "</filter>" +
-    "<rect width='160' height='160' filter='url(#g)'/>" +
-    "</svg>";
-  const encoded = encodeURIComponent(svg).replace(
-    /[()']/g,
-    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  return `url("data:image/svg+xml,${encoded}")`;
-}
-
-/**
  * Esc closes the mobile nav. Four lines of progressive enhancement (§10.4) —
  * the disclosure itself is a `<details>` and works with scripting off.
  */
@@ -82,14 +192,7 @@ export const escScript =
   "if(!d)return;d.open=false;var s=d.querySelector('summary');if(s)s.focus();});";
 
 export const css = `
-:root {
-  --ink-950:${tokens.ink950}; --ink-900:${tokens.ink900}; --ink-850:${tokens.ink850};
-  --ink-800:${tokens.ink800}; --ink-700:${tokens.ink700};
-  --line:${tokens.line}; --line-lit:${tokens.lineLit}; --line-strong:${tokens.lineStrong};
-  --ivory:${tokens.ivory}; --ivory-2:${tokens.ivory2};
-  --ivory-dim:${tokens.ivoryDim}; --ivory-faint:${tokens.ivoryFaint};
-  --brass:${tokens.brass}; --brass-lit:${tokens.brassLit}; --brass-hair:${tokens.brassHair};
-  --slate:${tokens.slate}; --rust:${tokens.rust}; --warn:${tokens.warn};
+:root {${palette(light)}
 
   --display:'Fraunces','Times New Roman',serif;
   --ui:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans Thai',sans-serif;
@@ -115,7 +218,17 @@ export const css = `
   --band:clamp(64px,12vw,144px);
   --band-hero:clamp(96px,18vw,220px);
   --header-h:60px;
-  --grain:${grainUri()};
+}
+
+/* Layer 2 — the system preference, but only while no explicit choice is in
+   force. Layer 3 — the explicit choice, which has to win in both directions,
+   so the same overrides are repeated rather than folded into one selector
+   list: a browser that does not understand one selector must not drop both. */
+@media (prefers-color-scheme:dark) {
+  :root:not([data-theme='light']) {${palette(dark)}
+  }
+}
+:root[data-theme='dark'] {${palette(dark)}
 }
 
 *,*::before,*::after { box-sizing:border-box; }
@@ -127,8 +240,8 @@ body {
   min-height:100vh;
   display:flex;
   flex-direction:column;
-  background:var(--ink-950);
-  color:var(--ivory);
+  background:var(--paper);
+  color:var(--ink);
   font-family:var(--ui);
   font-size:var(--t-body);
   font-weight:400;
@@ -141,18 +254,10 @@ body {
   -webkit-tap-highlight-color:transparent;
 }
 
-/* One printed surface across the whole viewport (§1). Never per plate. */
-body::after {
-  content:"";
-  position:fixed;
-  inset:0;
-  z-index:9999;
-  background-image:var(--grain);
-  background-size:160px 160px;
-  opacity:.035;
-  mix-blend-mode:overlay;
-  pointer-events:none;
-}
+/* §1's global film grain is gone. It existed to give a photograph-free product
+   a printed surface; over 36 real photographs an overlay blend is just a dirty
+   screen, and it was the one thing in the product painted above everything at
+   z-index 9999. Deleted rather than inverted (§11). */
 
 img,svg,table,pre,iframe { max-width:100%; }
 img,svg,video { display:block; height:auto; }
@@ -177,15 +282,15 @@ hr { border:0; border-top:1px solid var(--line); margin:0; }
 /* §10.4: anchors and the skip link otherwise land under the sticky header. */
 [id] { scroll-margin-block-start:calc(var(--header-h) + 16px); }
 
-/* Focus rings are never transitioned. The inner ink ring keeps the brass
-   legible even on an ivory-filled button (§10.4). */
+/* Focus rings are never transitioned. The inner page-coloured ring keeps the
+   accent legible even on an ink-filled button (§10.4). */
 :focus-visible {
-  outline:2px solid var(--brass);
+  outline:2px solid var(--accent);
   outline-offset:2px;
-  box-shadow:0 0 0 2px var(--ink-950);
+  box-shadow:0 0 0 2px var(--paper);
 }
 
-::selection { background:rgba(174,148,99,.28); color:var(--ivory); }
+::selection { background:var(--selection); color:var(--ink); }
 
 .vh {
   position:absolute; width:1px; height:1px; margin:-1px; padding:0;
@@ -194,15 +299,15 @@ hr { border:0; border-top:1px solid var(--line); margin:0; }
 
 .skip-link {
   position:absolute; left:-9999px; top:0; z-index:60;
-  background:var(--ink-900); border:1px solid var(--line-strong);
-  color:var(--ivory); padding:12px 16px; border-radius:2px;
+  background:var(--card); border:1px solid var(--line-strong);
+  color:var(--ink); padding:12px 16px; border-radius:2px;
 }
 .skip-link:focus { left:var(--pad); top:10px; }
 
 /* ---------- measure and rhythm ---------- */
 
 .shell { width:100%; max-width:var(--shell); margin-inline:auto; padding-inline:var(--pad); }
-.prose { max-width:var(--measure); color:var(--ivory-2); }
+.prose { max-width:var(--measure); color:var(--ink-2); }
 .prose > * + * { margin-top:var(--s4); }
 /* Heroes and section headers cap at 8 of 12 columns — the right third stays
    deliberately empty (§4). */
@@ -218,7 +323,7 @@ hr { border:0; border-top:1px solid var(--line); margin:0; }
 .scroll-x { overflow-x:auto; max-width:100%; -webkit-overflow-scrolling:touch; }
 /* A scroller has to be focusable or a keyboard user cannot reach the content it
    hides — measured at 275px hidden on the host console. */
-.scroll-x:focus-visible { outline:2px solid var(--brass); outline-offset:2px; }
+.scroll-x:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 
 /* Inline actions were measured at 15–25px tall. Grow the hit area without moving
    a pixel of the layout (§10.4). */
@@ -232,16 +337,16 @@ hr { border:0; border-top:1px solid var(--line); margin:0; }
 
 /* ---------- the two brand gestures (§3) ---------- */
 
-/* 1. Rule-and-index: 24px brass hairline, mono numeral, micro-caps label. */
+/* 1. Rule-and-index: a 24px accent hairline, a mono numeral, a micro-caps label. */
 .index {
   display:flex; align-items:center; gap:var(--s3);
   margin:0 0 var(--s6);
   font-size:var(--t-micro); line-height:1;
 }
-.index-rule { flex:none; width:24px; height:1px; background:var(--brass); }
-.index-num { font-family:var(--mono); font-weight:500; color:var(--brass); letter-spacing:.08em; }
-.index-sep { color:var(--ivory-faint); }
-.index-label { text-transform:uppercase; letter-spacing:.18em; color:var(--ivory-dim); font-weight:500; }
+.index-rule { flex:none; width:24px; height:1px; background:var(--accent); }
+.index-num { font-family:var(--mono); font-weight:500; color:var(--accent); letter-spacing:.08em; }
+.index-sep { color:var(--ink-faint); }
+.index-label { text-transform:uppercase; letter-spacing:.18em; color:var(--ink-3); font-weight:500; }
 
 /* 2. Optical inset: the first glyph sits on the container edge, not near it. */
 .h-hero,.h-page { text-indent:-.055em; }
@@ -252,66 +357,66 @@ hr { border:0; border-top:1px solid var(--line); margin:0; }
   display:inline-block;
   font-size:var(--t-micro); line-height:1; font-weight:500;
   text-transform:uppercase; letter-spacing:.18em;
-  color:var(--ivory-dim);
+  color:var(--ink-3);
 }
-.micro--brass { color:var(--brass); }
+.micro--brass { color:var(--accent); }
 
-.meta { font-size:var(--t-meta); line-height:1.4; letter-spacing:.02em; color:var(--ivory-dim); }
-.meta--bright { color:var(--ivory-2); }
+.meta { font-size:var(--t-meta); line-height:1.4; letter-spacing:.02em; color:var(--ink-3); }
+.meta--bright { color:var(--ink-2); }
 .num { font-family:var(--mono); font-weight:400; font-feature-settings:'tnum' 1; }
-.dot { color:var(--ivory-faint); padding-inline:.4em; }
+.dot { color:var(--ink-faint); padding-inline:.4em; }
 
 .h-hero { font-size:var(--t-hero); line-height:.94; letter-spacing:-.025em; font-weight:300; }
 .h-page { font-size:var(--t-h1); line-height:1.02; letter-spacing:-.02em; font-weight:300; }
 .h-sec  { font-size:var(--t-sec); line-height:1.15; letter-spacing:-.015em; }
 .h-card { font-size:var(--t-card); line-height:1.25; letter-spacing:-.01em; }
-.lede   { font-size:var(--t-lede); line-height:1.5; letter-spacing:-.005em; color:var(--ivory-2); }
+.lede   { font-size:var(--t-lede); line-height:1.5; letter-spacing:-.005em; color:var(--ink-2); }
 
 /* ---------- header ---------- */
 
 .site-header {
   position:sticky; top:0; z-index:50;
-  background:var(--ink-950);
+  background:var(--paper);
   border-block-end:1px solid var(--line);
-  box-shadow:0 24px 48px -24px rgba(0,0,0,.8);
+  box-shadow:var(--shadow-header);
 }
 .header-inner { display:flex; align-items:center; gap:var(--s4); min-height:var(--header-h); }
 
 .wordmark {
   font-family:var(--display);
   font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144;
-  font-size:1.0625rem; letter-spacing:.26em; color:var(--ivory);
+  font-size:1.0625rem; letter-spacing:.26em; color:var(--ink);
   white-space:nowrap; margin-inline-end:auto;
   display:inline-flex; align-items:center; min-height:44px;
 }
-.wordmark--quiet { color:var(--ivory-faint); font-size:.9375rem; margin-inline-end:0; }
+.wordmark--quiet { color:var(--ink-faint); font-size:.9375rem; margin-inline-end:0; }
 
 .nav-desktop { display:none; align-items:center; gap:var(--s5); margin-inline-start:auto; }
 .nav-link {
   display:inline-flex; align-items:center;
   min-height:44px; margin-inline:-12px; padding-inline:12px;
-  font-size:var(--t-meta); letter-spacing:.02em; color:var(--ivory-dim);
+  font-size:var(--t-meta); letter-spacing:.02em; color:var(--ink-3);
   border-block-end:1px solid transparent;
   transition:border-color 160ms ease-out,color 160ms ease-out,background-color 160ms ease-out,filter 120ms ease-out;
 }
-.nav-link:hover { color:var(--ivory); border-block-end-color:var(--brass); }
-.nav-link[aria-current='page'] { color:var(--ivory); border-block-end-color:var(--brass); }
+.nav-link:hover { color:var(--ink); border-block-end-color:var(--accent); }
+.nav-link[aria-current='page'] { color:var(--ink); border-block-end-color:var(--accent); }
 
 .nav-mobile { position:relative; margin-inline-start:auto; }
 .nav-mobile > summary {
   list-style:none; cursor:pointer;
   display:inline-flex; align-items:center; justify-content:center;
   min-height:44px; min-width:44px; padding-inline:12px;
-  font-size:var(--t-meta); color:var(--ivory-2);
+  font-size:var(--t-meta); color:var(--ink-2);
   border:1px solid var(--line-strong); border-radius:2px;
   transition:border-color 160ms ease-out,color 160ms ease-out,background-color 160ms ease-out,filter 120ms ease-out;
 }
 .nav-mobile > summary::-webkit-details-marker { display:none; }
-.nav-mobile[open] > summary { color:var(--ivory); border-color:var(--ivory-dim); }
+.nav-mobile[open] > summary { color:var(--ink); border-color:var(--ink-3); }
 .nav-panel {
   position:absolute; inset-inline:auto 0; top:calc(100% + 9px); z-index:50;
   min-width:12rem;
-  background:var(--ink-900);
+  background:var(--card);
   border:1px solid var(--line-strong);
   border-radius:2px;
   padding:var(--s2) var(--s4);
@@ -322,10 +427,10 @@ hr { border:0; border-top:1px solid var(--line); margin:0; }
 .nav-panel a {
   display:flex; align-items:center; min-height:44px;
   border-block-end:1px solid var(--line);
-  font-size:var(--t-meta); color:var(--ivory-dim);
+  font-size:var(--t-meta); color:var(--ink-3);
 }
 .nav-panel a:last-child { border-block-end:0; }
-.nav-panel a[aria-current='page'] { color:var(--ivory); }
+.nav-panel a[aria-current='page'] { color:var(--ink); }
 
 @media (min-width:900px) {
   :root { --header-h:68px; }
@@ -348,8 +453,48 @@ body.has-actionbar .site-main { padding-block-end:0; }
 .site-footer { border-block-start:1px solid var(--line); margin-block-start:var(--band); }
 .footer-inner { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s3) var(--s5); padding-block:var(--s6); }
 .footer-spacer { margin-inline-end:auto; }
-.footer-link { font-size:var(--t-meta); color:var(--ivory-faint); display:inline-flex; align-items:center; min-height:44px; }
-.footer-link:hover { color:var(--brass-lit); }
+.footer-link { font-size:var(--t-meta); color:var(--ink-faint); display:inline-flex; align-items:center; min-height:44px; }
+.footer-link:hover { color:var(--accent-2); }
+
+/* ---------- the theme switch (§11) ---------- */
+
+/* Two plain submit buttons in one form, drawn as the filter row is: a
+   micro-caps pair on a hairline, the live one marked by a 1px accent
+   underline. No pills, no icon, no emoji, no script — it posts and the page
+   comes back rendered in the other theme.
+
+   Which one is live is decided in CSS, by the same three-layer cascade the
+   palette uses, so Layout never has to know the current theme. Marking it
+   server-side would mean threading the theme through all nineteen Layout call
+   sites; this costs six rules and stays correct when the cookie is absent and
+   the system preference is doing the deciding. */
+.theme-switch { display:inline-flex; align-items:center; gap:var(--s3); margin:0; }
+.theme-switch-label { font-size:var(--t-micro); text-transform:uppercase; letter-spacing:.18em; color:var(--ink-faint); }
+.theme-btn {
+  font:inherit; font-size:var(--t-micro); font-weight:500;
+  text-transform:uppercase; letter-spacing:.18em;
+  display:inline-flex; align-items:center;
+  min-height:44px; padding:0; margin:0;
+  background:none; border:0; border-block-end:1px solid transparent;
+  color:var(--ink-faint); cursor:pointer;
+  transition:border-color 160ms ease-out,color 160ms ease-out,background-color 160ms ease-out,filter 120ms ease-out;
+}
+.theme-btn:active { filter:brightness(.90); }
+/* Layer 1: no cookie, no dark system preference — light is live. */
+.theme-btn[value='light'] { color:var(--ink); border-block-end-color:var(--accent); }
+/* Layer 2: the system preference, while no explicit choice overrides it. */
+@media (prefers-color-scheme:dark) {
+  :root:not([data-theme='light']) .theme-btn[value='light'] { color:var(--ink-faint); border-block-end-color:transparent; }
+  :root:not([data-theme='light']) .theme-btn[value='dark'] { color:var(--ink); border-block-end-color:var(--accent); }
+}
+/* Layer 3: the explicit choice, which wins in both directions. */
+:root[data-theme='dark'] .theme-btn[value='light'] { color:var(--ink-faint); border-block-end-color:transparent; }
+:root[data-theme='dark'] .theme-btn[value='dark'] { color:var(--ink); border-block-end-color:var(--accent); }
+:root[data-theme='light'] .theme-btn[value='light'] { color:var(--ink); border-block-end-color:var(--accent); }
+:root[data-theme='light'] .theme-btn[value='dark'] { color:var(--ink-faint); border-block-end-color:transparent; }
+/* Last, and specific enough to beat every state rule above, or hovering the
+   inactive label would do nothing in three of the four combinations. */
+:root .theme-btn[value]:hover { color:var(--ink); }
 
 /* ---------- hero and section ---------- */
 
@@ -371,46 +516,56 @@ body.has-actionbar .site-main { padding-block-end:0; }
 .section-heading { min-width:0; max-width:min(100%,calc(var(--shell) / 12 * 8)); }
 .section-action {
   margin-inline-start:auto; display:inline-flex; align-items:center;
-  min-height:44px; font-size:var(--t-meta); color:var(--ivory-2);
+  min-height:44px; font-size:var(--t-meta); color:var(--ink-2);
   border-block-end:1px solid transparent; white-space:nowrap;
   transition:border-color 160ms ease-out,color 160ms ease-out,background-color 160ms ease-out,filter 120ms ease-out;
 }
-.section-action:hover { color:var(--ivory); border-block-end-color:var(--brass); }
+.section-action:hover { color:var(--ink); border-block-end-color:var(--accent); }
 
 .rule { border-block-start:1px solid var(--line); margin-block:var(--band); }
 
-/* ---------- the plate (§1) ---------- */
+/* ---------- the plate — now the FALLBACK, not the hero (§11) ---------- */
 
+/* §1 built the plate to answer "how do we look expensive with zero
+   photography". There are photographs now, so the plate is what a record
+   without one falls back to. Every layer is driven from a token, so the same
+   five layers render as brass-on-lit-black in the dark theme and as
+   ink-on-toned-paper in the light one. */
 .plate {
   position:relative;
   container-type:inline-size;
   overflow:hidden;
   isolation:isolate;
-  background:radial-gradient(120% 90% at var(--ox,28%) 14%,#1B1A1D,#0E0E10 58%,#0A0A0B);
-  box-shadow:inset 0 1px 0 rgba(244,239,231,.06), inset 0 -90px 70px -70px #0A0A0B;
+  background:radial-gradient(120% 90% at var(--ox,28%) 14%,var(--plate-1),var(--plate-2) 58%,var(--plate-3));
+  box-shadow:var(--plate-inset);
 }
 /* Layer 2 — category wash. Flat colour, never a hashed hue.
-   §10.5: soft-light at .09 measures 1 RGB level of separation over this ground
-   — the tint is not subtle, it is absent. screen at .14 lifts 12 and spreads 6,
-   which is perceptible as difference without being nameable. */
+   §10.5 measured this on near-black: soft-light at .09 gives 1 RGB level of
+   separation — the tint is not subtle, it is absent — and screen at .14 lifts
+   12 and spreads 6. Screen cannot darken paper, so the light theme flips the
+   blend to multiply, measured the same way: 28 levels down, spread 6. Same
+   band, opposite direction. */
 .plate::before {
   content:""; position:absolute; inset:0;
   background:var(--wash,transparent);
-  opacity:.14; mix-blend-mode:screen;
+  opacity:var(--wash-alpha); mix-blend-mode:var(--wash-blend);
   pointer-events:none;
 }
-/* Layer 4 — the engraving. */
+/* Layer 4 — the engraving. The stroke colour rides --accent from the SVG; the
+   opacity lives here because paper needs a firmer line than lit black does. */
 .plate .plate-engraving { position:absolute; inset:0; width:100%; height:100%; }
-/* Layer 3 — monogram deboss. The plate's subject. */
+.plate .plate-engraving path { opacity:var(--engrave-opacity); }
+/* Layer 3 — monogram deboss. The plate's subject. Debossed either way: on ink
+   the highlight is above and the shadow below, on paper it is the reverse. */
 .plate-mono {
   position:absolute; inset:0;
   display:flex; align-items:center; justify-content:center;
   font-family:var(--display);
   font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144;
   font-size:44cqw; line-height:1; letter-spacing:-.02em;
-  color:var(--ink-800);
-  -webkit-text-stroke:.5px rgba(174,148,99,.35);
-  text-shadow:0 1px 0 rgba(244,239,231,.05), 0 -1px 0 rgba(0,0,0,.6);
+  color:var(--plate-mono-fill);
+  -webkit-text-stroke:.5px var(--plate-mono-stroke);
+  text-shadow:var(--plate-emboss);
   user-select:none;
 }
 /* Gatherings get a chart rule instead of a monogram — instrumentation, not
@@ -418,20 +573,50 @@ body.has-actionbar .site-main { padding-block-end:0; }
 .plate-rule {
   position:absolute; inset-inline:0; bottom:14%; height:16%;
   background-image:
-    repeating-linear-gradient(90deg,var(--brass-hair) 0 1px,transparent 1px 40px),
-    repeating-linear-gradient(90deg,var(--line-lit) 0 1px,transparent 1px 8px);
+    repeating-linear-gradient(90deg,var(--accent-hair) 0 1px,transparent 1px 40px),
+    repeating-linear-gradient(90deg,var(--line-mid) 0 1px,transparent 1px 8px);
   background-size:100% 100%,100% 52%;
   background-position:0 100%,0 100%;
   background-repeat:no-repeat;
 }
-.plate--card { aspect-ratio:4/3; }
+/* 4/3 of a full-bleed phone card is most of the screen. A cover is a glance,
+   not a page. */
+.plate--card { aspect-ratio:16/10; }
 .plate--square { aspect-ratio:1/1; }
 .plate--hero { aspect-ratio:4/3; }
 @media (min-width:768px) {
   .plate--card { aspect-ratio:3/2; }
   .plate--hero { aspect-ratio:21/9; }
 }
+/* ---------- the photograph — the primary visual (§11) ---------- */
+
 .plate-photo { width:100%; height:100%; object-fit:cover; }
+/* A photograph gets no generated ground, so .plate--photo replaces the
+   plate's radial with the raised surface: a pale sky or a white tablecloth
+   otherwise bleeds straight into the paper and the card loses its top edge.
+   The treatment is a hairline plus a whisper of vignette, drawn in an overlay
+   because an inset shadow on the wrapper paints *under* the image. Not
+   glassmorphism: no blur, no translucency over content, no elevation. */
+.plate--photo { background:var(--paper-2); }
+.plate--photo::after {
+  content:""; position:absolute; inset:0; z-index:1;
+  box-shadow:inset 0 0 0 1px var(--photo-edge), var(--photo-vignette);
+  pointer-events:none;
+}
+/* The circle and gathering heroes pull their h1 up over the cover's lower edge
+   (§5, margin-top:-.4em). Against a generated plate that was safe, because the
+   ground was ours. Against a photograph it is not, and it fails in BOTH
+   themes: measured on /events/first-light-plunge at 1280, the 22px the title
+   overlaps contains pixels from luminance 0.00 to 0.91, so ink-on-photo comes
+   out at 1.13:1 and ivory-on-photo at 1.05:1 where large text needs 3:1.
+
+   So the foot of a hero photograph fades to the page colour, opaque across the
+   whole overlap and tapering above it. That removes the failure by
+   construction instead of hoping no photograph is dark at the bottom. Only the
+   hero: a card's title sits below its cover and never crosses it. */
+.plate--hero.plate--photo::after {
+  background:linear-gradient(to top,var(--photo-foot) 0,var(--photo-foot) 26px,transparent min(20%,104px));
+}
 
 /* ---------- grids (§4: shared hairlines, a printed index) ---------- */
 
@@ -459,12 +644,11 @@ body.has-actionbar .site-main { padding-block-end:0; }
 .card {
   position:relative;
   display:flex; flex-direction:column; min-width:0;
-  background:var(--ink-900);
-  box-shadow:inset 0 1px 0 rgba(244,239,231,.05);
+  background:var(--card);
   transition:background-color 160ms ease-out;
 }
 .grid:not(.grid--hair) > .card { border:1px solid var(--line); border-radius:2px; }
-.card:hover { background:var(--ink-850); }
+.card:hover { background:var(--paper-2); }
 .card-body { display:flex; flex-direction:column; gap:var(--s2); padding:20px; flex:1 1 auto; }
 .card-title { margin-block-start:var(--s1); }
 /* Whole-card link — never an <a> inside an <a> (§10.4). Any block that wants
@@ -472,7 +656,7 @@ body.has-actionbar .site-main { padding-block-end:0; }
 .linkbox { position:relative; }
 .card-title a::after,.linkbox-title a::after { content:""; position:absolute; inset:0; }
 .card .secondary,.linkbox .secondary { position:relative; z-index:2; }
-.card-text { color:var(--ivory-dim); font-size:var(--t-meta); line-height:1.55; }
+.card-text { color:var(--ink-3); font-size:var(--t-meta); line-height:1.55; }
 .card-foot {
   margin-block-start:auto; padding-block-start:var(--s3);
   border-block-start:1px solid var(--line);
@@ -490,23 +674,23 @@ body.has-actionbar .site-main { padding-block-end:0; }
   cursor:pointer;
   transition:border-color 160ms ease-out,color 160ms ease-out,background-color 160ms ease-out,filter 120ms ease-out;
 }
-.btn--primary { background:var(--ivory); color:var(--ink-950); }
-.btn--primary:hover { background:var(--ivory-2); color:var(--ink-950); }
-.btn--ghost { background:transparent; color:var(--ivory); border-color:var(--line-strong); }
-.btn--ghost:hover { color:var(--ivory); border-color:var(--ivory-dim); background:var(--ink-850); }
+.btn--primary { background:var(--ink); color:var(--paper); }
+.btn--primary:hover { background:var(--ink-2); color:var(--paper); }
+.btn--ghost { background:transparent; color:var(--ink); border-color:var(--line-strong); }
+.btn--ghost:hover { color:var(--ink); border-color:var(--ink-3); background:var(--paper-2); }
 .hero .lede, .hero-lede { margin-block-start:12px; }
 
 .btn--quiet {
   min-height:48px;
-  min-height:44px; padding:0; border:0; background:none; color:var(--ivory-2);
-  border-block-end:1px solid var(--brass-hair); border-radius:0;
+  min-height:44px; padding:0; border:0; background:none; color:var(--ink-2);
+  border-block-end:1px solid var(--accent-hair); border-radius:0;
 }
-.btn--quiet:hover { color:var(--brass-lit); border-block-end-color:var(--brass); }
+.btn--quiet:hover { color:var(--accent-2); border-block-end-color:var(--accent); }
 .btn--block { width:100%; }
 /* These two ship together or neither ships (§10.4). */
 .btn:active { filter:brightness(.90); }
 .btn[disabled],.btn[aria-disabled='true'] {
-  color:var(--ivory-faint); background:transparent;
+  color:var(--ink-faint); background:transparent;
   border-color:var(--line-strong); cursor:not-allowed;
 }
 .btn[disabled]:active { filter:none; }
@@ -516,38 +700,44 @@ body.has-actionbar .site-main { padding-block-end:0; }
 .status {
   font-size:var(--t-micro); line-height:1; font-weight:500;
   text-transform:uppercase; letter-spacing:.18em;
-  color:var(--ivory-dim); white-space:nowrap;
+  color:var(--ink-3); white-space:nowrap;
 }
-.status--brass { color:var(--brass); }
+.status--brass { color:var(--accent); }
 .status--warn { color:var(--warn); }
 .status--rust { color:var(--rust); }
 .status--slate { color:var(--slate); }
 
-/* ---------- filters (§5: hairline row, brass underline, never pills) ---------- */
+/* ---------- filters (§5: hairline row, accent underline, never pills) ---------- */
 
 .filters { display:flex; flex-wrap:wrap; gap:0 var(--s5); border-block-end:1px solid var(--line); }
 .filter {
   display:inline-flex; align-items:center; min-height:48px;
   font-size:var(--t-micro); font-weight:500; text-transform:uppercase; letter-spacing:.18em;
-  color:var(--ivory-faint);
+  color:var(--ink-faint);
   border-block-end:1px solid transparent; margin-block-end:-1px;
   transition:border-color 160ms ease-out,color 160ms ease-out,background-color 160ms ease-out,filter 120ms ease-out;
 }
-.filter:hover { color:var(--ivory-2); }
-.filter[aria-current='page'] { color:var(--ivory); border-block-end-color:var(--brass); }
+.filter:hover { color:var(--ink-2); }
+.filter[aria-current='page'] { color:var(--ink); border-block-end-color:var(--accent); }
 
 /* ---------- fields (§5 Join: bare ink, a rule under each input) ---------- */
 
 .field { display:block; }
 .field + .field { margin-block-start:var(--s5); }
-.field-label { display:block; margin-block-end:var(--s2); color:var(--ivory-dim); font-size:var(--t-meta); }
-.field-req { color:var(--brass); }
-input,select,textarea {
+.field-label { display:block; margin-block-end:var(--s2); color:var(--ink-3); font-size:var(--t-meta); }
+.field-req { color:var(--accent); }
+/* Radios and checkboxes are excluded on purpose. They used to be swept up by
+   this rule, and background:transparent plus border:0 on a native radio makes
+   Chrome paint an UNCHECKED control as a solid disc. On near-black that read
+   as a dark ring and passed unnoticed; on paper all five category radios read
+   as selected at once. Measured on /host: every input reported checked=false
+   while every one of them rendered filled. They are left native below. */
+input:not([type='radio']):not([type='checkbox']),select,textarea {
   /* Under 16px iOS zooms on focus and pans sideways, breaking the overflow
      gate in a way desktop never catches (§10.4). */
   font-size:max(16px,1rem);
   font-family:var(--ui);
-  color:var(--ivory);
+  color:var(--ink);
   background:transparent;
   border:0;
   border-block-end:1px solid var(--line-strong);
@@ -558,45 +748,52 @@ input,select,textarea {
   transition:border-color 160ms ease-out,color 160ms ease-out,background-color 160ms ease-out,filter 120ms ease-out;
 }
 textarea { min-height:120px; padding-block-start:var(--s2); resize:vertical; line-height:1.6; }
-input::placeholder,textarea::placeholder { color:var(--ivory-faint); }
-input:hover,select:hover,textarea:hover { border-block-end-color:var(--ivory-dim); }
+input::placeholder,textarea::placeholder { color:var(--ink-faint); }
+input:not([type='radio']):not([type='checkbox']):hover,select:hover,textarea:hover { border-block-end-color:var(--ink-3); }
+/* Left native, so checked and unchecked are told apart by the platform. The
+   fill is the accent, which is where a small filled mark is permitted. */
+input[type='radio'],input[type='checkbox'] {
+  accent-color:var(--accent);
+  inline-size:18px; block-size:18px;
+  margin:0; flex:none;
+}
 input[aria-invalid='true'],textarea[aria-invalid='true'],select[aria-invalid='true'] { border-block-end-color:var(--rust); }
-.field-hint { display:block; margin-block-start:var(--s2); font-size:var(--t-meta); color:var(--ivory-faint); }
+.field-hint { display:block; margin-block-start:var(--s2); font-size:var(--t-meta); color:var(--ink-faint); }
 .field-error { display:block; margin-block-start:var(--s2); font-size:var(--t-meta); color:var(--rust); }
 .field-code input { font-family:var(--mono); letter-spacing:.14em; text-transform:uppercase; }
 .invitation {
   font-family:var(--display); font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144;
-  font-style:italic; font-size:var(--t-lede); color:var(--ivory-2); line-height:1.45;
+  font-style:italic; font-size:var(--t-lede); color:var(--ink-2); line-height:1.45;
 }
 .column-420 { width:100%; max-width:420px; }
 
-fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed; }
+fieldset[disabled] input { color:var(--ink-3); border-block-end-style:dashed; }
 
 /* ---------- alert (§10.4 confirmation banner) ---------- */
 
 .alert {
   border-inline-start:1px solid var(--line-strong);
   padding:var(--s3) var(--s4);
-  font-size:var(--t-meta); color:var(--ivory-2);
-  background:var(--ink-900);
+  font-size:var(--t-meta); color:var(--ink-2);
+  background:var(--card);
 }
-.alert--brass { border-inline-start-color:var(--brass); color:var(--ivory); }
-.alert--warn { border-inline-start-color:var(--warn); color:var(--ivory); }
-.alert--rust { border-inline-start-color:var(--rust); color:var(--ivory); }
+.alert--brass { border-inline-start-color:var(--accent); color:var(--ink); }
+.alert--warn { border-inline-start-color:var(--warn); color:var(--ink); }
+.alert--rust { border-inline-start-color:var(--rust); color:var(--ink); }
 .alert--confirm { animation:banner 240ms cubic-bezier(.2,0,0,1) 1; }
 @keyframes banner { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
 
 /* ---------- empty state (fact + next action, no illustration) ---------- */
 
 .empty { border-block:1px solid var(--line); padding-block:var(--s7); max-width:var(--measure); }
-.empty-note { margin-block-start:var(--s3); color:var(--ivory-dim); font-size:var(--t-meta); }
+.empty-note { margin-block-start:var(--s3); color:var(--ink-3); font-size:var(--t-meta); }
 .empty-action { margin-block-start:var(--s5); }
 
 /* ---------- stat, avatar ---------- */
 
 .stat { display:flex; flex-direction:column; gap:var(--s2); min-width:0; }
-.stat-value { font-family:var(--mono); font-size:var(--t-sec); line-height:1; letter-spacing:-.01em; color:var(--ivory); }
-.stat--brass .stat-value { color:var(--brass); }
+.stat-value { font-family:var(--mono); font-size:var(--t-sec); line-height:1; letter-spacing:-.01em; color:var(--ink); }
+.stat--brass .stat-value { color:var(--accent); }
 
 /* No coloured avatars, and no radius over 4px — so: a hairline square. */
 .avatar {
@@ -604,9 +801,9 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
   display:inline-flex; align-items:center; justify-content:center;
   width:36px; height:36px;
   border:1px solid var(--line-strong); border-radius:2px;
-  background:var(--ink-900);
+  background:var(--card);
   font-family:var(--display); font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144;
-  font-size:.75rem; letter-spacing:.02em; line-height:1; color:var(--ivory-2);
+  font-size:.75rem; letter-spacing:.02em; line-height:1; color:var(--ink-2);
 }
 
 /* ---------- gallery (contract §A) ---------- */
@@ -621,18 +818,18 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
 }
 .gallery-item { flex:0 0 auto; width:min(78vw,320px); scroll-snap-align:start; }
 .gallery-item .plate { aspect-ratio:4/3; }
-.gallery-caption { display:block; margin-block-start:var(--s3); padding-inline:var(--s3) 0; font-size:var(--t-meta); color:var(--ivory-dim); }
+.gallery-caption { display:block; margin-block-start:var(--s3); padding-inline:var(--s3) 0; font-size:var(--t-meta); color:var(--ink-3); }
 @media (min-width:900px) { .gallery-item { width:340px; } }
 
 /* ---------- member and attendee lists (contract §B, §C) ---------- */
 
 .people { display:grid; gap:1px; grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr)); }
 .people > * { min-width:0; box-shadow:0 0 0 1px var(--line); }
-.person { display:flex; align-items:flex-start; gap:var(--s3); padding:var(--s4); background:var(--ink-900); height:100%; }
+.person { display:flex; align-items:flex-start; gap:var(--s3); padding:var(--s4); background:var(--card); height:100%; }
 .person .plate { flex:none; width:44px; height:44px; }
 .person-body { min-width:0; }
-.person-name { font-size:var(--t-body); color:var(--ivory); }
-.person-line { font-size:var(--t-meta); color:var(--ivory-dim); }
+.person-name { font-size:var(--t-body); color:var(--ink); }
+.person-line { font-size:var(--t-meta); color:var(--ink-3); }
 .people-foot { margin-block-start:var(--s4); display:flex; flex-wrap:wrap; align-items:center; gap:var(--s3) var(--s5); }
 
 /* ---------- ledger (§5: not a card grid) ---------- */
@@ -653,13 +850,13 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
   border-block-end:1px solid var(--line);
   transition:background-color 160ms ease-out;
 }
-.ledger-row:hover { background:var(--ink-900); }
-.ledger-date { font-family:var(--mono); font-size:var(--t-meta); line-height:1.45; color:var(--ivory-faint); }
+.ledger-row:hover { background:var(--card); }
+.ledger-date { font-family:var(--mono); font-size:var(--t-meta); line-height:1.45; color:var(--ink-faint); }
 .ledger-date b,.ledger-date span { display:block; }
-.ledger-date b { font-weight:500; color:var(--ivory); }
-.ledger-date span:last-child { color:var(--ivory-dim); }
+.ledger-date b { font-weight:500; color:var(--ink); }
+.ledger-date span:last-child { color:var(--ink-3); }
 .ledger-thumb { width:64px; height:64px; }
-.ledger-title { font-family:var(--display); font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144; font-size:var(--t-body); font-weight:400; color:var(--ivory); }
+.ledger-title { font-family:var(--display); font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144; font-size:var(--t-body); font-weight:400; color:var(--ink); }
 .ledger-main { min-width:0; display:flex; flex-direction:column; gap:var(--s1); grid-column:1 / -1; }
 .ledger-foot { display:flex; flex-wrap:wrap; align-items:center; gap:var(--s1) var(--s3); margin-block-start:var(--s1); }
 @media (min-width:560px) {
@@ -677,11 +874,11 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
 .cal-grid,.cal-dow { display:none; }
 .cal-list { display:block; }
 .cal-day-row { display:grid; grid-template-columns:64px minmax(0,1fr); gap:var(--s4); padding-block:var(--s4); border-block-start:1px solid var(--line); }
-.cal-day-row.is-today .cal-day-label { color:var(--brass); }
-.cal-day-label { font-family:var(--mono); font-size:var(--t-meta); color:var(--ivory-faint); }
+.cal-day-row.is-today .cal-day-label { color:var(--accent); }
+.cal-day-label { font-family:var(--mono); font-size:var(--t-meta); color:var(--ink-faint); }
 .cal-day-label span { display:block; }
-.cal-day-label .num { font-size:var(--t-lede); line-height:1.1; color:var(--ivory); }
-.cal-day-row.is-today .cal-day-label .num { color:var(--brass); }
+.cal-day-label .num { font-size:var(--t-lede); line-height:1.1; color:var(--ink); }
+.cal-day-row.is-today .cal-day-label .num { color:var(--accent); }
 .cal-entry { display:grid; grid-template-columns:auto minmax(0,1fr); column-gap:8px;
   align-items:baseline; min-height:32px; }
 /* The body-level overflow-wrap:anywhere backstop (§10.4) is right for long
@@ -689,11 +886,11 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
    "06:" / "40". A clock time, a price and a ticket code are atomic. */
 .cal-entry .num, .num, .mono, .ledger-date, .price { overflow-wrap:normal; word-break:normal; }
 .cal-entry .num { white-space:nowrap; }
-.cal-entry .num { color:var(--brass); font-size:var(--t-meta); }
-.cal-entry-title { font-size:var(--t-meta); color:var(--ivory-2); }
-.cal-entry a:hover { color:var(--ivory); }
-.cal-empty { font-size:var(--t-meta); color:var(--ivory-faint); }
-.cal-more { font-size:var(--t-micro); text-transform:uppercase; letter-spacing:.18em; color:var(--ivory-faint); }
+.cal-entry .num { color:var(--accent); font-size:var(--t-meta); }
+.cal-entry-title { font-size:var(--t-meta); color:var(--ink-2); }
+.cal-entry a:hover { color:var(--ink); }
+.cal-empty { font-size:var(--t-meta); color:var(--ink-faint); }
+.cal-more { font-size:var(--t-micro); text-transform:uppercase; letter-spacing:.18em; color:var(--ink-faint); }
 
 @media (min-width:900px) {
   .cal-list { display:none; }
@@ -701,13 +898,13 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
   .cal-dow > * { padding:var(--s2) var(--s3); min-width:0; }
   .cal-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:1px; }
   .cal-grid > * { min-width:0; box-shadow:0 0 0 1px var(--line); }
-  .cal-cell { min-height:118px; padding:var(--s3); background:var(--ink-900); display:flex; flex-direction:column; gap:var(--s1); }
-  .cal-cell.is-outside { background:var(--ink-950); }
-  .cal-cell.is-outside .cal-num { color:var(--ivory-faint); }
-  /* Today is a 1px brass rule, never a filled block. */
-  .cal-cell.is-today { box-shadow:0 0 0 1px var(--line), inset 0 1px 0 var(--brass); }
-  .cal-num { font-family:var(--mono); font-size:var(--t-meta); color:var(--ivory-dim); }
-  .cal-cell.is-today .cal-num { color:var(--brass); }
+  .cal-cell { min-height:118px; padding:var(--s3); background:var(--card); display:flex; flex-direction:column; gap:var(--s1); }
+  .cal-cell.is-outside { background:var(--paper); }
+  .cal-cell.is-outside .cal-num { color:var(--ink-faint); }
+  /* Today is a 1px accent rule, never a filled block. */
+  .cal-cell.is-today { box-shadow:0 0 0 1px var(--line), inset 0 1px 0 var(--accent); }
+  .cal-num { font-family:var(--mono); font-size:var(--t-meta); color:var(--ink-3); }
+  .cal-cell.is-today .cal-num { color:var(--accent); }
   .cal-cell .cal-entry { min-height:0; display:block; }
   .cal-cell .cal-entry .num { margin-inline-end:var(--s1); }
 }
@@ -718,56 +915,56 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
 .pass-table th,.pass-table td { padding:var(--s4) var(--s3); border-block-end:1px solid var(--line); vertical-align:top; }
 .pass-table thead th {
   padding-block:var(--s3); font-size:var(--t-micro); font-weight:500;
-  text-transform:uppercase; letter-spacing:.18em; color:var(--ivory-faint);
+  text-transform:uppercase; letter-spacing:.18em; color:var(--ink-faint);
 }
 .pass-table tbody tr:last-child th,.pass-table tbody tr:last-child td { border-block-end:0; }
 .pass-table th:first-child,.pass-table td:first-child { padding-inline-start:var(--s4); }
 .pass-table th:last-child,.pass-table td:last-child { padding-inline-end:var(--s4); text-align:right; }
 .pass-name {
   font-family:var(--display); font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144;
-  font-size:var(--t-card); font-weight:400; color:var(--ivory);
+  font-size:var(--t-card); font-weight:400; color:var(--ink);
 }
-.pass-price { font-family:var(--mono); font-weight:500; color:var(--brass); white-space:nowrap; }
-.pass-derivation { display:block; margin-block-start:var(--s1); font-size:var(--t-meta); color:var(--ivory-faint); }
-.bordered { border:1px solid var(--line); border-radius:2px; background:var(--ink-900); }
+.pass-price { font-family:var(--mono); font-weight:500; color:var(--accent); white-space:nowrap; }
+.pass-derivation { display:block; margin-block-start:var(--s1); font-size:var(--t-meta); color:var(--ink-faint); }
+.bordered { border:1px solid var(--line); border-radius:2px; background:var(--card); }
 
 /* ---------- pass cards (account, where a table would be overkill) ---------- */
 
 .pass-grid { display:grid; gap:1px; grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr)); }
 .pass-grid > * { min-width:0; box-shadow:0 0 0 1px var(--line); }
-.pass-card { background:var(--ink-900); padding:var(--s5); display:flex; flex-direction:column; gap:var(--s2); height:100%; }
-.pass-card-price { font-family:var(--mono); font-weight:500; font-size:var(--t-card); color:var(--brass); }
+.pass-card { background:var(--card); padding:var(--s5); display:flex; flex-direction:column; gap:var(--s2); height:100%; }
+.pass-card-price { font-family:var(--mono); font-weight:500; font-size:var(--t-card); color:var(--accent); }
 
 /* ---------- credits: N hairline squares, filled = spent (§5) ---------- */
 
 .credits { display:flex; flex-wrap:wrap; gap:6px; }
 .credit-sq { width:16px; height:16px; border:1px solid var(--line-strong); border-radius:1px; }
-.credit-sq.is-spent { background:var(--ivory-dim); border-color:var(--ivory-dim); }
+.credit-sq.is-spent { background:var(--ink-3); border-color:var(--ink-3); }
 
 /* ---------- action area (the contract's seven states) ---------- */
 
 .action { display:flex; flex-direction:column; gap:var(--s3); }
-.action-kicker { font-size:var(--t-meta); color:var(--ivory-dim); }
-.action-kicker a { color:var(--ivory-2); border-block-end:1px solid var(--brass-hair); }
-.action-kicker a:hover { color:var(--brass-lit); }
-.action-line { font-family:var(--mono); font-size:var(--t-meta); color:var(--ivory-2); }
-.action-help { font-size:var(--t-meta); color:var(--ivory-dim); }
-.action-help a { border-block-end:1px solid var(--brass-hair); }
-.action-help a:hover { color:var(--brass-lit); }
+.action-kicker { font-size:var(--t-meta); color:var(--ink-3); }
+.action-kicker a { color:var(--ink-2); border-block-end:1px solid var(--accent-hair); }
+.action-kicker a:hover { color:var(--accent-2); }
+.action-line { font-family:var(--mono); font-size:var(--t-meta); color:var(--ink-2); }
+.action-help { font-size:var(--t-meta); color:var(--ink-3); }
+.action-help a { border-block-end:1px solid var(--accent-hair); }
+.action-help a:hover { color:var(--accent-2); }
 .action-passes { display:grid; gap:var(--s2); }
-.action-heading { font-size:var(--t-meta); color:var(--ivory); }
+.action-heading { font-size:var(--t-meta); color:var(--ink); }
 .action-stub {
   display:flex; align-items:center; justify-content:space-between; gap:var(--s3);
   min-height:48px; padding:0 var(--s4);
-  border:1px solid var(--brass-hair); border-radius:2px;
-  color:var(--ivory);
+  border:1px solid var(--accent-hair); border-radius:2px;
+  color:var(--ink);
   transition:border-color 160ms ease-out,color 160ms ease-out,background-color 160ms ease-out,filter 120ms ease-out;
 }
-.action-stub:hover { border-color:var(--brass); background:var(--ink-900); }
-.action-stub .num { color:var(--brass); letter-spacing:.1em; }
+.action-stub:hover { border-color:var(--accent); background:var(--card); }
+.action-stub .num { color:var(--accent); letter-spacing:.1em; }
 .action-sidebar { position:sticky; top:calc(var(--header-h) + 24px); }
-/* The one large brass number in the product (§5). */
-.places-left { font-family:var(--mono); font-weight:500; font-size:var(--t-sec); line-height:1; color:var(--brass); }
+/* The one large accent number in the product (§5). */
+.places-left { font-family:var(--mono); font-weight:500; font-size:var(--t-sec); line-height:1; color:var(--accent); }
 
 /* ---------- action bar (§10.1: opaque, never glass) ---------- */
 
@@ -775,17 +972,17 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
   position:fixed; inset-inline:0; bottom:0; z-index:45;
   display:flex; align-items:center; gap:var(--s3);
   min-height:52px;
-  background:var(--ink-900);
+  background:var(--card);
   border-block-start:1px solid var(--line-strong);
-  box-shadow:0 -12px 32px rgba(0,0,0,.45);
+  box-shadow:var(--shadow-bar);
   padding-block:var(--s2);
   padding-block-end:calc(var(--s2) + env(safe-area-inset-bottom,0px));
   padding-inline-start:calc(var(--pad) + env(safe-area-inset-left,0px));
   padding-inline-end:calc(var(--pad) + env(safe-area-inset-right,0px));
 }
 .actionbar-text { min-width:0; flex:1 1 auto; }
-.actionbar-title { font-size:var(--t-meta); color:var(--ivory); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.actionbar-note { font-family:var(--mono); font-size:var(--t-micro); color:var(--ivory-dim); }
+.actionbar-title { font-size:var(--t-meta); color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.actionbar-note { font-family:var(--mono); font-size:var(--t-micro); color:var(--ink-3); }
 .actionbar .btn { flex:none; }
 @media (min-width:900px) { .actionbar { display:none; } }
 
@@ -793,32 +990,32 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
 
 .ticket {
   position:relative;
-  border:1px solid var(--brass-hair);
+  border:1px solid var(--accent-hair);
   border-radius:2px;
-  background:radial-gradient(120% 90% at var(--ox,28%) 14%,#1B1A1D,#0E0E10 58%,#0A0A0B);
-  box-shadow:inset 0 1px 0 rgba(244,239,231,.06);
+  background:radial-gradient(120% 90% at var(--ox,28%) 14%,var(--plate-1),var(--plate-2) 58%,var(--plate-3));
+  box-shadow:var(--plate-inset);
   padding:var(--s6) var(--s5) var(--s6) var(--s7);
   overflow:hidden;
 }
 /* Double rule: the border above, plus a 1px inset at 4px. */
 .ticket::before {
   content:""; position:absolute; inset:4px;
-  border:1px solid var(--brass-hair); border-radius:1px; pointer-events:none;
+  border:1px solid var(--accent-hair); border-radius:1px; pointer-events:none;
 }
 /* Perforation down one edge. */
 .ticket::after {
   content:""; position:absolute; inset-block:0; inset-inline-start:20px; width:1px;
-  background-image:repeating-linear-gradient(180deg,var(--brass-hair) 0 4px,transparent 4px 10px);
+  background-image:repeating-linear-gradient(180deg,var(--accent-hair) 0 4px,transparent 4px 10px);
   pointer-events:none;
 }
 .ticket-code {
   font-family:var(--mono); font-weight:500; font-size:var(--t-code);
-  line-height:1; letter-spacing:.12em; color:var(--ivory); overflow-wrap:anywhere;
+  line-height:1; letter-spacing:.12em; color:var(--ink); overflow-wrap:anywhere;
 }
 .ticket-grid { display:grid; gap:var(--s4) var(--s6); grid-template-columns:repeat(auto-fill,minmax(min(190px,100%),1fr)); margin-block-start:var(--s6); }
 .ticket-grid > * { min-width:0; }
-.ticket-dd { color:var(--ivory-2); font-size:var(--t-meta); margin-block-start:var(--s1); }
-.ticket-seal { position:absolute; top:var(--s5); right:var(--s5); width:72px; height:72px; color:var(--brass); opacity:.55; }
+.ticket-dd { color:var(--ink-2); font-size:var(--t-meta); margin-block-start:var(--s1); }
+.ticket-seal { position:absolute; top:var(--s5); right:var(--s5); width:72px; height:72px; color:var(--accent); opacity:.55; }
 @media (max-width:559px) { .ticket-seal { display:none; } }
 
 /* ---------- checkout (contract §E) ---------- */
@@ -827,17 +1024,17 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
 .checkout-lines { border-block:1px solid var(--line); }
 .checkout-line { display:flex; align-items:baseline; gap:var(--s4); padding-block:var(--s3); border-block-end:1px solid var(--line); }
 .checkout-line:last-child { border-block-end:0; }
-.checkout-line dt { color:var(--ivory-dim); font-size:var(--t-meta); }
-.checkout-line dd { margin-inline-start:auto; text-align:right; color:var(--ivory-2); }
-.checkout-card { border:1px solid var(--line); border-radius:2px; padding:var(--s4); background:var(--ink-900); }
+.checkout-line dt { color:var(--ink-3); font-size:var(--t-meta); }
+.checkout-line dd { margin-inline-start:auto; text-align:right; color:var(--ink-2); }
+.checkout-card { border:1px solid var(--line); border-radius:2px; padding:var(--s4); background:var(--card); }
 .checkout-demo { color:var(--slate); font-size:var(--t-meta); }
-.card-digits { font-family:var(--mono); letter-spacing:.14em; color:var(--ivory-2); }
+.card-digits { font-family:var(--mono); letter-spacing:.14em; color:var(--ink-2); }
 
 /* ---------- definition list (when/where, §5) ---------- */
 
 .deflist { display:grid; gap:var(--s5); grid-template-columns:repeat(auto-fill,minmax(min(190px,100%),1fr)); }
 .deflist > div { min-width:0; }
-.deflist dd { margin-block-start:var(--s2); color:var(--ivory-2); }
+.deflist dd { margin-block-start:var(--s2); color:var(--ink-2); }
 
 /* ---------- motion (§10.3: the three permitted transitions, and nothing else) ---------- */
 
@@ -853,10 +1050,16 @@ fieldset[disabled] input { color:var(--ivory-dim); border-block-end-style:dashed
 /* §10.1: the desktop sticky sidebar and the fixed mobile action bar are
    alternatives, never both. Below 900px the bar owns the action, so a phone
    never shows two competing calls to action on one screen. */
+.nav-mobile-actions { display:flex; align-items:center; gap:8px; margin-inline-start:auto; }
+.btn--compact { min-height:40px; padding-inline:14px; font-size:var(--t-meta); }
+@media (min-width:900px) { .nav-mobile-actions { display:none; } }
+
 .nav-signout { display:inline-flex; margin:0; }
 .nav-link--plain { background:none; border:0; padding:0; margin:0; cursor:pointer;
-  font:inherit; color:var(--ivory-dim); min-height:44px; display:inline-flex; align-items:center; }
-.nav-link--plain:hover { color:var(--brass-lit); }
+  /* font:inherit also resets font-size, so Sign out rendered at body size
+     next to nav links at --t-meta. Inherit the family, keep the nav size. */
+  font-family:inherit; font-size:var(--t-meta); line-height:inherit; color:var(--ink-3); min-height:44px; display:inline-flex; align-items:center; }
+.nav-link--plain:hover { color:var(--accent-2); }
 .nav-panel .nav-link--plain { min-height:48px; width:100%; }
 
 .action-sidebar { display:none; }

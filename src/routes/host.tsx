@@ -585,7 +585,7 @@ function CategoryChoice(props: { value: string; error?: string }) {
               name="category"
               value={category}
               checked={value === category}
-              style="accent-color:var(--ivory);inline-size:18px;block-size:18px"
+              style="accent-color:var(--ink);inline-size:18px;block-size:18px"
             />
             {category}
           </label>
@@ -735,7 +735,7 @@ function HostPage(props: {
                 name="isPrivate"
                 value="on"
                 checked={form.isPrivate}
-                style="accent-color:var(--ivory);inline-size:18px;block-size:18px"
+                style="accent-color:var(--ink);inline-size:18px;block-size:18px"
               />
               <span>Approve members by hand</span>
             </label>
@@ -1258,7 +1258,7 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
                     name="status"
                     value="published"
                     checked={eventForm.status !== "draft"}
-                    style="accent-color:var(--ivory);inline-size:18px;block-size:18px"
+                    style="accent-color:var(--ink);inline-size:18px;block-size:18px"
                   />
                   Publish now
                 </label>
@@ -1270,7 +1270,7 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
                     name="status"
                     value="draft"
                     checked={eventForm.status === "draft"}
-                    style="accent-color:var(--ivory);inline-size:18px;block-size:18px"
+                    style="accent-color:var(--ink);inline-size:18px;block-size:18px"
                   />
                   Keep as a draft
                 </label>

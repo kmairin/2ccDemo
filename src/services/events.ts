@@ -24,6 +24,7 @@ export interface EventSummary {
   startsAt: string;
   endsAt: string;
   capacity: number;
+  coverKey: string | null;
   /** capacity − confirmed bookings, floored at zero. */
   placesLeft: number;
   circle: { slug: string; name: string };
@@ -60,6 +61,7 @@ export interface CalendarDay {
  * `./common`) and touches no database, so this is safe at module scope.
  */
 const summaryColumns = {
+  coverKey: events.coverKey,
   id: events.id,
   slug: events.slug,
   title: events.title,
@@ -84,6 +86,7 @@ type SummaryRow = {
   startsAt: Date;
   endsAt: Date;
   capacity: number;
+  coverKey: string | null;
   confirmed: number;
   circleSlug: string;
   circleName: string;
@@ -100,6 +103,7 @@ function toSummary(row: SummaryRow): EventSummary {
     startsAt: row.startsAt.toISOString(),
     endsAt: row.endsAt.toISOString(),
     capacity: Number(row.capacity),
+    coverKey: row.coverKey,
     placesLeft: placesLeft(row.capacity, row.confirmed),
     circle: { slug: row.circleSlug, name: row.circleName },
   };
@@ -155,6 +159,7 @@ export async function getEventBySlug(
       ...summaryColumns,
       description: events.description,
       status: events.status,
+    coverKey: events.coverKey,
       circleId: circles.id,
       circleTagline: circles.tagline,
       circleCity: circles.city,

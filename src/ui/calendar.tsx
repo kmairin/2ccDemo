@@ -29,6 +29,8 @@ export type LedgerEntry = {
   /** "06:30" or "06:30–09:00". */
   timeLabel: string;
   placesLeft: number;
+  /** A real photograph under design/assets/. Null falls back to the plate. */
+  coverKey?: string | null;
 };
 
 export type LedgerGroup = {
@@ -55,9 +57,10 @@ export function Ledger(props: { groups: LedgerGroup[] }) {
                 <span>{e.monthLabel}</span>
                 <span>{e.timeLabel}</span>
               </p>
-              {/* A 64px plate with no subject reads as a failed thumbnail —
-                  all eight rows look alike. The circle's monogram is what makes
-                  it an object rather than a missing image. */}
+              {/* The photograph, at 64px. Falling back to a plate, where the
+                  circle's monogram is what keeps a 64px square from reading as
+                  a failed thumbnail — with no subject all eight rows look
+                  alike. */}
               <Plate
                 seed={e.slug}
                 category={e.category ?? ""}
@@ -66,6 +69,8 @@ export function Ledger(props: { groups: LedgerGroup[] }) {
                 shape="bare"
                 density="thumb"
                 className="ledger-thumb"
+                objectKey={e.coverKey}
+                alt=""
               />
               <div class="ledger-main">
                 <h3 class="ledger-title linkbox-title">

@@ -10,23 +10,27 @@
  *
  * Deliberately narrow:
  *
- *   - It only fires when the `circles` TABLE IS ABSENT, asked of
- *     `information_schema`. That distinguishes "this database is empty" from
- *     "the database is briefly unreachable" — a connection error throws and is
- *     left alone, so a blip never triggers a rebuild.
+ *   - It only fires when the world is absent OR was built from a DIFFERENT
+ *     SEED than the one shipped in this deploy (`app_meta.seed_version` against
+ *     `BOOTSTRAP_VERSION`). Table presence is asked of `information_schema`,
+ *     which distinguishes "this database is empty" from "the database is
+ *     briefly unreachable" — a connection error throws and is left alone, so a
+ *     blip never triggers a rebuild.
  *   - Every statement is re-runnable (`CREATE TABLE IF NOT EXISTS`,
  *     `ON CONFLICT DO NOTHING`), so two isolates racing on a cold start cannot
  *     leave a half-built schema.
- *   - It runs once per isolate, and never drops or overwrites anything.
+ *   - It runs once per isolate.
  *
- * Locally this never fires: `npm run db:migrate` has already made the tables.
+ * Locally it fires at most once per seed change — `npm run db:migrate` and
+ * `npm run seed` have already built the same world, so the rebuild reloads it
+ * and then the recorded version matches for good.
  *
  * This is demo scaffolding, not a migration system. Real schema changes still go
  * through `src/schema.ts` + `npm run db:generate`. When the demo is over, delete
  * this file, its call in `src/index.ts`, and `src/bootstrap-sql.ts`.
  */
 import { sql } from "drizzle-orm";
-import { BOOTSTRAP_STATEMENTS } from "./bootstrap-sql";
+import { BOOTSTRAP_STATEMENTS, BOOTSTRAP_VERSION } from "./bootstrap-sql";
 import { batch, getDb, type DatabaseEnv } from "./db";
 import { createLogger, type LoggerEnv } from "./logger";
 
@@ -48,8 +52,19 @@ export const bootstrapReport: {
   ran: boolean;
   applied: number;
   failed: number;
+  /** The seed this build of the app carries. */
+  version: string;
+  /** What the database says it was last built from — `null` before the first check. */
+  storedVersion: string | null;
   failures: { statement: string; error: string }[];
-} = { ran: false, applied: 0, failed: 0, failures: [] };
+} = {
+  ran: false,
+  applied: 0,
+  failed: 0,
+  version: BOOTSTRAP_VERSION,
+  storedVersion: null,
+  failures: [],
+};
 
 /** First scalar of the first row. The data-service proxy returns positional arrays. */
 function scalar(rows: unknown): number {
@@ -59,8 +74,56 @@ function scalar(rows: unknown): number {
   return Number(Object.values(obj ?? {})[0] ?? 0);
 }
 
+/** First column of the first row, as text. `null` when there is no row. */
+function firstText(rows: unknown): string | null {
+  const first: unknown = (rows as unknown[])[0];
+  if (first === undefined) return null;
+  const value = Array.isArray(first) ? first[0] : Object.values(first as object)[0];
+  return value === null || value === undefined ? null : String(value);
+}
+
+/** Does a table exist? Asked of information_schema, so a missing table is not an error. */
+async function tableExists(env: EnsureEnv, name: string): Promise<boolean> {
+  const db = getDb(env);
+  return (
+    scalar(
+      await db.execute(
+        sql`select count(*)::int from information_schema.tables
+            where table_schema = 'public' and table_name = ${name}`,
+      ),
+    ) > 0
+  );
+}
+
 /**
- * Is the app's world already here?
+ * Which seed was this database built from? `null` if nobody has ever said.
+ *
+ * Checks that `app_meta` exists before reading it. Selecting from a missing
+ * table throws, and `ensureSchema` reads a throw as "the database is
+ * unreachable" and skips the rebuild — which would make the very database that
+ * most needs rebuilding the one that never does.
+ */
+async function storedSeedVersion(env: EnsureEnv): Promise<string | null> {
+  if (!(await tableExists(env, "app_meta"))) return null;
+  const db = getDb(env);
+  return firstText(
+    await db.execute(sql`select "value" from "app_meta" where "key" = 'seed_version'`),
+  );
+}
+
+/**
+ * Record which seed the world was built from. Upsert, because a rebuild may be
+ * the second, third or tenth this database has seen.
+ */
+async function writeSeedVersion(env: EnsureEnv): Promise<void> {
+  await getDb(env).execute(
+    sql`insert into "app_meta" ("key", "value") values ('seed_version', ${BOOTSTRAP_VERSION})
+        on conflict ("key") do update set "value" = excluded."value"`,
+  );
+}
+
+/**
+ * Does the world look like somebody loaded it?
  *
  * Asking information_schema first — rather than `select from circles` — is what
  * separates "no schema" from "cannot reach the database right now": an
@@ -71,15 +134,9 @@ function scalar(rows: unknown): number {
  * which is worse than an error because nothing looks wrong. A circles table
  * with zero rows means the data never arrived, so treat it as not-yet-built.
  */
-async function worldExists(env: EnsureEnv): Promise<boolean> {
+async function looksPopulated(env: EnsureEnv): Promise<boolean> {
   const db = getDb(env);
-  const tables = scalar(
-    await db.execute(
-      sql`select count(*)::int from information_schema.tables
-          where table_schema = 'public' and table_name = 'circles'`,
-    ),
-  );
-  if (tables === 0) return false;
+  if (!(await tableExists(env, "circles"))) return false;
 
   // Not just circles. The deployed run stopped part-way and left circles
   // populated but events, members and photos empty — and a circles-only check
@@ -97,6 +154,27 @@ async function worldExists(env: EnsureEnv): Promise<boolean> {
   const events = scalar(await db.execute(sql`select count(*)::int from events`));
   if (events === 0) return false;
   return scalar(await db.execute(sql`select count(*)::int from bookings`)) > 0;
+}
+
+/**
+ * Is the app's world already here, AND is it the world this deploy ships?
+ *
+ * The second half is the part that was missing. Every check above asks whether
+ * the database looks UNBUILT, and a seed change does not make it look unbuilt:
+ * when every circle and gathering gained a photograph and 123 gallery rows
+ * gained an object key, production stayed fully populated, so nothing fired and
+ * the live site served the old photo-less rows through deploy after deploy.
+ *
+ * `app_meta.seed_version` closes that gap. It is written at the end of a
+ * rebuild and compared here, so "already built" means built from THIS seed.
+ * Absent or stale — including on every database built before this marker
+ * existed — is a rebuild.
+ */
+async function worldExists(env: EnsureEnv): Promise<boolean> {
+  if (!(await looksPopulated(env))) return false;
+  const stored = await storedSeedVersion(env);
+  bootstrapReport.storedVersion = stored;
+  return stored === BOOTSTRAP_VERSION;
 }
 
 async function build(env: EnsureEnv): Promise<void> {
@@ -149,7 +227,41 @@ async function build(env: EnsureEnv): Promise<void> {
   bootstrapReport.ran = true;
   bootstrapReport.applied = applied;
   bootstrapReport.failed = failed;
-  log.info("database bootstrapped", { applied, failed, total: BOOTSTRAP_STATEMENTS.length });
+
+  /**
+   * Stamp the version — but only if the data actually landed.
+   *
+   * "Successful" cannot mean `failed === 0`. Re-running against a database that
+   * already has its constraints fails every `ALTER TABLE … ADD CONSTRAINT`, by
+   * design (see the generator), and gating the stamp on a clean run would mean
+   * the marker is never written on exactly the databases it exists for — so
+   * every request in every isolate would rebuild, forever.
+   *
+   * So ask the world instead of counting errors: if the rows are there, the
+   * rebuild did its job and this seed is what the database now holds.
+   */
+  try {
+    if (await looksPopulated(env)) {
+      await writeSeedVersion(env);
+      bootstrapReport.storedVersion = BOOTSTRAP_VERSION;
+    } else {
+      log.error("bootstrap left the world empty; seed version not recorded", { applied, failed });
+    }
+  } catch (err) {
+    // A rebuild that worked but could not record itself will simply run again.
+    // Wasteful, not wrong — and far better than claiming a version that is not
+    // in the database.
+    log.error("could not record the seed version", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  log.info("database bootstrapped", {
+    applied,
+    failed,
+    total: BOOTSTRAP_STATEMENTS.length,
+    version: BOOTSTRAP_VERSION,
+  });
 }
 
 /**

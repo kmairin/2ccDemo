@@ -37,10 +37,10 @@ export type PlateProps = {
   /** Set false on plates under ~48px, where a hairline engraving is mush. */
   engraving?: boolean;
   /**
-   * An R2 key, and the upgrade path to real photography: when it is set the
-   * component renders `<img src="/assets/…">` from the bucket instead of a
-   * generated plate. Drop files into `design/assets/`, run `npm run assets`,
-   * set `photos.objectKey`, and the photographs swap in with no code change.
+   * An R2 key. When it is set the component renders `<img src="/assets/…">`
+   * from the bucket, and that is now the normal case — every circle and every
+   * gathering has a photograph. The generated plate below is the fallback for
+   * a record that does not.
    */
   objectKey?: string | null;
   /** Only used for a real photograph. Generated plates are decorative. */
@@ -67,8 +67,11 @@ export function Plate(props: PlateProps) {
     .join(" ");
 
   if (objectKey !== undefined && objectKey !== null && objectKey !== "") {
+    // `plate--photo` drops the generated ground and adds the hairline-plus-
+    // vignette overlay: on paper a pale photograph otherwise bleeds into the
+    // page and the card loses its edge.
     return (
-      <div class={cls}>
+      <div class={`${cls} plate--photo`}>
         <img class="plate-photo" src={`/assets/${objectKey}`} alt={alt ?? ""} loading="lazy" decoding="async" />
       </div>
     );
@@ -211,13 +214,15 @@ export type CircleCardProps = {
   category: string;
   memberCount: number;
   isPrivate?: boolean;
+  /** A real photograph under design/assets/. Null falls back to the plate. */
+  coverKey?: string | null;
 };
 
 export function CircleCard(props: CircleCardProps) {
-  const { slug, name, tagline, city, category, memberCount, isPrivate } = props;
+  const { slug, name, tagline, city, category, memberCount, isPrivate, coverKey } = props;
   return (
     <article class="card">
-      <Plate seed={slug} category={category} monogram={initials(name)} />
+      <Plate seed={slug} category={category} monogram={initials(name)} objectKey={coverKey} alt={name} />
       <div class="card-body">
         <span class="micro micro--brass">{category}</span>
         <h3 class="h-card card-title">
@@ -244,14 +249,16 @@ export type EventCardProps = {
   when: string;
   placesLeft: number;
   category?: string;
+  /** A real photograph under design/assets/. Null falls back to the plate. */
+  coverKey?: string | null;
 };
 
 export function EventCard(props: EventCardProps) {
-  const { slug, title, circleName, city, venue, when, placesLeft, category } = props;
+  const { slug, title, circleName, city, venue, when, placesLeft, category, coverKey } = props;
   const full = placesLeft <= 0;
   return (
     <article class="card">
-      <Plate seed={slug} category={category ?? ""} rule={true} />
+      <Plate seed={slug} category={category ?? ""} rule={true} objectKey={coverKey} alt={title} />
       <div class="card-body">
         <span class="meta num">{when}</span>
         <h3 class="h-card card-title">

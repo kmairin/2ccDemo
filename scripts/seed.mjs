@@ -1048,6 +1048,34 @@ const SPARE_CREDITS = [
 // comment in `src/schema.ts`).
 // ---------------------------------------------------------------------------
 
+
+// --- real photographs -------------------------------------------------------
+//
+// Files live at design/assets/photos/<group>/NN.jpg and are synced to storage by
+// the deploy pipeline. Setting `object_key` makes the UI render an <img> instead
+// of a generated plate — the swap the schema was built for.
+//
+// One group per circle, six files each, reused across that circle's gatherings.
+// A sailing club's evenings all look like sailing, so reuse reads as consistency
+// rather than as a shortage.
+const PHOTO_GROUP = {
+  "cap-ferrat": "sailing-monaco",
+  "es-freus": "sailing-ibiza",
+  "cold-room": "cold-aspen",
+  "bica-table": "dining-lisbon",
+  "sunrise-court": "padel-dubai",
+  "nightform": "art-bangkok",
+};
+const PHOTOS_PER_GROUP = 6;
+
+/** `photos/cold-aspen/03.jpg` — the key the /assets/* route serves. */
+function photoKey(circleKey, index) {
+  const group = PHOTO_GROUP[circleKey];
+  if (!group) throw new Error(`no photo group for circle "${circleKey}"`);
+  const n = (((index % PHOTOS_PER_GROUP) + PHOTOS_PER_GROUP) % PHOTOS_PER_GROUP) + 1;
+  return `photos/${group}/${String(n).padStart(2, "0")}.jpg`;
+}
+
 const CIRCLE_PHOTOS = {
   "cap-ferrat": [
     "Pontoon C at Port Hercule, 07:15",
@@ -1280,6 +1308,8 @@ function buildRows() {
     category: c.category,
     host_user_id: userId(c.host),
     is_private: c.isPrivate,
+    // The first frame of this circle's photo group is its cover.
+    cover_key: photoKey(c.key, 0),
     created_at: daysAgo(c.founded),
   }));
 
@@ -1348,6 +1378,10 @@ function buildRows() {
   // --- gatherings ----------------------------------------------------------
 
   const events = EVENTS.map((e) => ({
+    // Borrowed from the circle's group. Indexed by POSITION within the circle,
+    // not by hash: hashing collided and Cap Ferrat's six gatherings shared only
+    // three covers, which reads as a bug in a card grid.
+    cover_key: photoKey(e.circle, 1 + EVENTS.filter((x) => x.circle === e.circle).findIndex((x) => x.key === e.key)),
     id: eventId(e.key),
     circle_id: circleId(e.circle),
     slug: e.slug,
@@ -1365,6 +1399,13 @@ function buildRows() {
 
   // --- photographs, of which there are none --------------------------------
 
+  /** Which circle a gathering belongs to, so it can borrow that circle's photos. */
+  const eventCircleKey = (key) => {
+    const found = EVENTS.find((e) => e.key === key);
+    if (!found) throw new Error(`unknown gathering "${key}"`);
+    return found.circle;
+  };
+
   const photos = [];
   for (const [circleKey, captions] of Object.entries(CIRCLE_PHOTOS)) {
     captions.forEach((caption, i) => {
@@ -1374,7 +1415,7 @@ function buildRows() {
         event_id: null,
         caption,
         seed: `${circleKey}-${String(i + 1).padStart(2, "0")}`,
-        object_key: null,
+        object_key: photoKey(circleKey, i),
         sort_order: i,
         created_at: daysAgo(30 + i),
       });
@@ -1388,7 +1429,7 @@ function buildRows() {
         event_id: eventId(eventKey),
         caption,
         seed: `${eventKey}-${String(i + 1).padStart(2, "0")}`,
-        object_key: null,
+        object_key: photoKey(eventCircleKey(eventKey), hashInt(`photo:${eventKey}`) + i),
         sort_order: i,
         created_at: daysAgo(15 + i),
       });
