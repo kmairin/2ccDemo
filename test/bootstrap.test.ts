@@ -299,6 +299,36 @@ describe.runIf(available)("the deployed bootstrap", () => {
     expect(reset).toBeUndefined(); // the rebuild never even started
   });
 
+  it("records where it got to when the deadline abandons it mid-load", async () => {
+    /**
+     * Deployed, a request applied 160 statements and recorded a cursor of ZERO.
+     * The save was after the loop, and the deadline abandoned the attempt
+     * before the loop returned — so the next request started from the
+     * beginning, deleted the 160 rows the last one had loaded, and reloaded
+     * exactly the same ones. It could have run all night without finishing.
+     */
+    await asProduction();
+    resetEnsureSchemaForTests();
+    // Slow enough that the twelve data chunks cannot all fit inside the
+    // deadline, fast enough that the six bookkeeping trips leave room for some
+    // of them — which is the shape production actually showed: 0.36s of
+    // bookkeeping, then four chunks at about a second each.
+    slowTripMs.ms = 400;
+    try {
+      await ensureSchema(env);
+      const stored = (
+        await client.unsafe(`select value from app_meta where key = 'data_cursor'`)
+      )[0]?.value as string | undefined;
+      const cursor = stored ? Number(stored.split(":")[1]) : 0;
+
+      expect(cursor).toBeGreaterThan(0); // progress was saved
+      expect(cursor).toBeLessThan(468); // and it genuinely was cut short
+    } finally {
+      slowTripMs.ms = 0;
+      await drain();
+    }
+  }, 60_000);
+
   it("costs nothing once the world is complete", async () => {
     await asProduction();
     await ensureSchema(env);

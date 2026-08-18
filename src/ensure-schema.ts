@@ -145,12 +145,13 @@ const DEADLINE_MS = 5_000;
 /**
  * How long a rebuild may hold the lease before another isolate may take it.
  *
- * Long enough that a slow-but-working rebuild is not interrupted, short enough
- * that an isolate killed mid-rebuild does not lock the database out of ever
- * being built. A request that cannot get the lease does not wait for it — it
- * serves the page.
+ * An attempt is bounded to DEADLINE_MS, so ten seconds is generous for a live
+ * holder — and the holder that matters is the dead one. A request abandoned on
+ * the deadline never runs its release, so deployed a sixty-second lease meant
+ * every request for the next minute declined to do any work at all. A request
+ * that cannot get the lease does not wait for it — it serves the page.
  */
-const LEASE_MS = 60_000;
+const LEASE_MS = 10_000;
 
 type EnsureEnv = DatabaseEnv & LoggerEnv;
 
@@ -384,7 +385,10 @@ async function apply(
   statements: readonly string[],
   from: number,
   budget: Budget,
-  { oneAtATime = false }: { oneAtATime?: boolean } = {},
+  {
+    oneAtATime = false,
+    checkpoint,
+  }: { oneAtATime?: boolean; checkpoint?: (reached: number) => Promise<void> } = {},
 ): Promise<number> {
   const db = getDb(env);
   const asQuery = (statement: string) => ({
@@ -411,6 +415,17 @@ async function apply(
       await timed(`batch@${cursor}`, () => batch(env, chunk.map(asQuery)));
       cursor += chunk.length;
       bootstrapReport.applied += chunk.length;
+      /**
+       * Record progress HERE, not after the loop.
+       *
+       * Deployed, a request applied 160 statements and recorded a cursor of
+       * zero: the deadline abandoned the attempt before the loop returned, so
+       * the write that saved its place never ran. The next request began at
+       * zero, its first statements deleted everything the last one had loaded,
+       * and it applied the same 160 rows again — forever. A checkpoint costs
+       * ~50ms against a ~1s batch, which is the cheapest 5% this file spends.
+       */
+      await checkpoint?.(cursor);
       continue;
     } catch {
       // Find out which statement in the chunk is unhappy, one at a time, and
@@ -543,6 +558,7 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
       DATA_STATEMENTS,
       readCursor(await readMeta(env, "data_cursor")),
       budget,
+      { checkpoint: (reached) => writeMeta(env, "data_cursor", `${BOOTSTRAP_VERSION}:${reached}`) },
     );
     await writeMeta(env, "data_cursor", `${BOOTSTRAP_VERSION}:${cursor}`);
     bootstrapReport.cursor = cursor;
