@@ -5,25 +5,35 @@
  * given no connection string to point drizzle-kit at, so the first deploy of
  * this project answered `{"error":"Internal server error"}` on every page that
  * reads data. There is no dashboard step that fixes that, so the app fixes it
- * itself: the first request that needs data creates the schema and the demo
- * world from the committed statements in `bootstrap-sql.ts`.
+ * itself: requests that need data build the schema and the demo world from the
+ * committed statements in `bootstrap-sql.ts`.
  *
- * Deliberately narrow:
+ * ## The rule this file exists to obey
  *
- *   - It only fires when the world is absent OR was built from a DIFFERENT
- *     SEED than the one shipped in this deploy (`app_meta.seed_version` against
- *     `BOOTSTRAP_VERSION`). Table presence is asked of `information_schema`,
- *     which distinguishes "this database is empty" from "the database is
- *     briefly unreachable" — a connection error throws and is left alone, so a
- *     blip never triggers a rebuild.
- *   - Every statement is re-runnable (`CREATE TABLE IF NOT EXISTS`,
- *     `ON CONFLICT DO NOTHING`), so two isolates racing on a cold start cannot
- *     leave a half-built schema.
- *   - It runs once per isolate.
+ * **A page request must never spend its budget on the bootstrap.**
  *
- * Locally it fires at most once per seed change — `npm run db:migrate` and
- * `npm run seed` have already built the same world, so the rebuild reloads it
- * and then the recorded version matches for good.
+ * That rule is written in blood. The previous version ran the whole build
+ * inside whichever request arrived first and waited for all of it. Deployed,
+ * that request took **157 seconds and then answered 500** — and so did every
+ * other page, for hours. A Worker gets a limited number of subrequests and a
+ * limited amount of wall time per request; the bootstrap ate both, so by the
+ * time the page ran its own query there was nothing left to spend and the query
+ * threw. The site was not slow, it was down, and it stayed down because every
+ * new request repeated the same doomed 157 seconds.
+ *
+ * So the work is now **budgeted** and **resumable**:
+ *
+ *   - `ROUNDTRIP_BUDGET` caps how many round trips one request may spend here.
+ *     When the budget runs out the request stops and returns. The page then
+ *     renders with whatever is in the database — possibly not much, on the very
+ *     first request, but it renders, in milliseconds, instead of dying.
+ *   - Progress is written to `app_meta.data_cursor`, so the next request picks
+ *     up where this one stopped instead of starting over. A healthy database
+ *     finishes the whole load in the first request; a slow or unhappy one takes
+ *     several, and the site is up and improving the whole time.
+ *
+ * Anything that cannot be made cheap is made rare instead: the destructive
+ * rebuild happens once per seed version, behind a lease, never per request.
  *
  * This is demo scaffolding, not a migration system. Real schema changes still go
  * through `src/schema.ts` + `npm run db:generate`. When the demo is over, delete
@@ -31,20 +41,18 @@
  */
 import { sql } from "drizzle-orm";
 import { BOOTSTRAP_STATEMENTS, BOOTSTRAP_VERSION } from "./bootstrap-sql";
+import { batch, getDb, type DatabaseEnv } from "./db";
+import { createLogger, type LoggerEnv } from "./logger";
 
 /**
  * The statements fall into two halves with different rules.
  *
- * SCHEMA — CREATE TABLE, ADD COLUMN, indexes, constraints. Every one is
- * idempotent, and it must run on EVERY cold start, because a column added after
- * a database was first built arrives no other way. Gating this behind the seed
- * version is what left production with a `circles` table that had no
- * `cover_key` while the code selected one: the version already matched from an
- * earlier partial rebuild, so the column-adds never ran again and the site
- * answered 500 on every page that read data.
+ * SCHEMA — CREATE TABLE, indexes, constraints. Every one is idempotent and
+ * cheap, and it must run before anything else, because `app_meta` — where all
+ * the progress below is recorded — is itself one of these statements.
  *
- * DATA — DELETE then INSERT. Expensive and destructive, so only when the seed
- * genuinely changed.
+ * DATA — DELETE then INSERT. 468 statements, and the expensive half. This is
+ * the part that gets a budget and a cursor.
  */
 const isDataStatement = (statement: string) => /^(DELETE FROM|INSERT INTO)/i.test(statement);
 
@@ -54,10 +62,7 @@ const isDataStatement = (statement: string) => /^(DELETE FROM|INSERT INTO)/i.tes
  * Its tables are `schema_locked`, so `ADD COLUMN` comes back with "this schema
  * change is disallowed because table … is locked", and unlocking needs a
  * single-statement implicit transaction, which the data service does not give
- * us. That is also why the primary keys were never added — the probe shows
- * production carrying CockroachDB's `rowid` stand-in instead.
- *
- * Local Postgres has no such lock, which is why this only ever failed in
+ * us. Local Postgres has no such lock, which is why this only ever failed in
  * production. So: never send an ALTER. A column added later arrives by dropping
  * the table and recreating it, which the version bump already implies.
  */
@@ -70,6 +75,7 @@ const isCreateTable = (statement: string) => /^CREATE TABLE/i.test(statement);
  * need, and 47 guaranteed failures per run bury the ones that matter.
  */
 const isNoise = (statement: string) => /SET \(schema_locked/i.test(statement);
+
 /** Safe on every cold start: creates anything absent, changes nothing present. */
 const CREATE_STATEMENTS = BOOTSTRAP_STATEMENTS.filter(
   (s) => !isDataStatement(s) && !isNoise(s) && !isAlter(s),
@@ -85,33 +91,57 @@ const TABLES_IN_DROP_ORDER = [
   "bookings", "passes", "orders", "circle_members", "photos",
   "events", "packages", "circles", "sessions", "users",
 ];
-const DROP_STATEMENTS = TABLES_IN_DROP_ORDER.map(
-  (t) => `DROP TABLE IF EXISTS "public"."${t}" CASCADE`,
-);
 const RESET_STATEMENTS = [
-  ...DROP_STATEMENTS,
+  ...TABLES_IN_DROP_ORDER.map((t) => `DROP TABLE IF EXISTS "public"."${t}" CASCADE`),
   ...BOOTSTRAP_STATEMENTS.filter((s) => isCreateTable(s) && !isNoise(s)),
   ...BOOTSTRAP_STATEMENTS.filter(
     (s) => !isDataStatement(s) && !isNoise(s) && !isAlter(s) && !isCreateTable(s),
   ),
 ];
 const DATA_STATEMENTS = BOOTSTRAP_STATEMENTS.filter(isDataStatement);
-import { batch, getDb, type DatabaseEnv } from "./db";
-import { createLogger, type LoggerEnv } from "./logger";
+
+/**
+ * How many round trips one request may spend building the database.
+ *
+ * The number that matters is not this one but the one it protects: a Worker's
+ * per-request subrequest allowance, which the old unbudgeted build exhausted
+ * before the page could run a single query of its own. Twenty is enough to send
+ * all twelve data chunks plus the bookkeeping in one go when the database is
+ * healthy, and small enough that the page always has room left to render.
+ */
+export const ROUNDTRIP_BUDGET = 20;
+
+/** Statements per round trip. Twelve chunks covers the 468 data statements. */
+const CHUNK = 40;
+
+/**
+ * How long a rebuild may hold the lease before another isolate may take it.
+ *
+ * Long enough that a slow-but-working rebuild is not interrupted, short enough
+ * that an isolate killed mid-rebuild does not lock the database out of ever
+ * being built. A request that cannot get the lease does not wait for it — it
+ * serves the page.
+ */
+const LEASE_MS = 60_000;
 
 type EnsureEnv = DatabaseEnv & LoggerEnv;
 
-/** One attempt per isolate. Concurrent callers await the same promise. */
-let inFlight: Promise<void> | null = null;
+/**
+ * Set once this isolate has seen the world complete. Not a cache of work in
+ * flight: each request does its own bounded slice, so there is nothing to share
+ * and nothing to await. The old `inFlight` promise made every concurrent
+ * request wait on the same doomed 157-second build.
+ */
+let settled = false;
 
 /**
- * What went wrong last time we tried to build the schema.
+ * What the last attempt did, for `GET /api/health?schema=1`.
  *
  * Deployed, there is no console and no way to run a query by hand, so a
  * bootstrap that half-works is otherwise invisible — the app just serves empty
- * lists. This holds the first few failures so `GET /api/health?schema=1` can
- * report them. It contains our own SQL and the database's error text: no user
- * data, no secrets. Remove it with the rest of the bootstrap scaffolding.
+ * lists. This holds counts and the first few failures. It contains our own SQL
+ * and the database's error text: no user data, no secrets. Remove it with the
+ * rest of the bootstrap scaffolding.
  */
 export const bootstrapReport: {
   ran: boolean;
@@ -121,6 +151,11 @@ export const bootstrapReport: {
   version: string;
   /** What the database says it was last built from — `null` before the first check. */
   storedVersion: string | null;
+  /** How many data statements have landed, of how many. */
+  cursor: number;
+  total: number;
+  /** Set when a request stopped early because it ran out of budget. */
+  budgetExhausted: boolean;
   failures: { statement: string; error: string }[];
 } = {
   ran: false,
@@ -128,15 +163,26 @@ export const bootstrapReport: {
   failed: 0,
   version: BOOTSTRAP_VERSION,
   storedVersion: null,
+  cursor: 0,
+  total: DATA_STATEMENTS.length,
+  budgetExhausted: false,
   failures: [],
 };
 
-/** First scalar of the first row. The data-service proxy returns positional arrays. */
-function scalar(rows: unknown): number {
-  const first: unknown = (rows as unknown[])[0];
-  if (Array.isArray(first)) return Number(first[0] ?? 0);
-  const obj = first as Record<string, unknown> | undefined;
-  return Number(Object.values(obj ?? {})[0] ?? 0);
+/** Counts down the round trips one request may spend. */
+class Budget {
+  constructor(private left: number) {}
+  get spent(): boolean {
+    return this.left <= 0;
+  }
+  take(): boolean {
+    if (this.left <= 0) {
+      bootstrapReport.budgetExhausted = true;
+      return false;
+    }
+    this.left--;
+    return true;
+  }
 }
 
 /** First column of the first row, as text. `null` when there is no row. */
@@ -147,228 +193,276 @@ function firstText(rows: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
 }
 
-/** Does a table exist? Asked of information_schema, so a missing table is not an error. */
-async function tableExists(env: EnsureEnv, name: string): Promise<boolean> {
-  const db = getDb(env);
-  return (
-    scalar(
-      await db.execute(
-        sql`select count(*)::int from information_schema.tables
-            where table_schema = 'public' and table_name = ${name}`,
-      ),
-    ) > 0
-  );
+/** First scalar of the first row. The data-service proxy returns positional arrays. */
+function scalar(rows: unknown): number {
+  return Number(firstText(rows) ?? 0);
 }
 
-/**
- * Which seed was this database built from? `null` if nobody has ever said.
- *
- * Checks that `app_meta` exists before reading it. Selecting from a missing
- * table throws, and `ensureSchema` reads a throw as "the database is
- * unreachable" and skips the rebuild — which would make the very database that
- * most needs rebuilding the one that never does.
- */
-async function storedSeedVersion(env: EnsureEnv): Promise<string | null> {
-  if (!(await tableExists(env, "app_meta"))) return null;
-  const db = getDb(env);
+/** Read one `app_meta` key. `null` when the table or the row is absent. */
+async function readMeta(env: EnsureEnv, key: string): Promise<string | null> {
   return firstText(
-    await db.execute(sql`select "value" from "app_meta" where "key" = 'seed_version'`),
+    await getDb(env).execute(sql`select "value" from "app_meta" where "key" = ${key}`),
   );
 }
 
-/**
- * Record which seed the world was built from. Upsert, because a rebuild may be
- * the second, third or tenth this database has seen.
- */
-async function writeSeedVersion(env: EnsureEnv): Promise<void> {
+/** Write one `app_meta` key. Upsert: a rebuild may be this database's tenth. */
+async function writeMeta(env: EnsureEnv, key: string, value: string): Promise<void> {
   await getDb(env).execute(
-    sql`insert into "app_meta" ("key", "value") values ('seed_version', ${BOOTSTRAP_VERSION})
+    sql`insert into "app_meta" ("key", "value") values (${key}, ${value})
         on conflict ("key") do update set "value" = excluded."value"`,
   );
 }
 
 /**
+ * Claim the right to rebuild, for this request only.
+ *
+ * Without this, every isolate that arrives while the world is empty starts its
+ * own `DROP TABLE … CASCADE` and its own reload, on the same tables, at the same
+ * moment — so they block on each other's locks and wipe each other's progress.
+ * The winner is decided by the database in one statement: the `where` clause
+ * only fires when the existing lease has expired, and `returning` comes back
+ * empty for everyone who lost.
+ */
+async function claimLease(env: EnsureEnv): Promise<boolean> {
+  const now = Date.now();
+  try {
+    const rows = await getDb(env).execute(
+      sql`insert into "app_meta" ("key", "value") values ('bootstrap_lease', ${String(now + LEASE_MS)})
+          on conflict ("key") do update set "value" = excluded."value"
+          where "app_meta"."value" < ${String(now)}
+          returning "key"`,
+    );
+    return (rows as unknown as unknown[]).length > 0;
+  } catch {
+    // Fail OPEN. The lease only keeps two isolates from rebuilding the same
+    // tables at once, and the budget above is what actually keeps a request
+    // safe. If this database will not do a conditional upsert with RETURNING,
+    // the cost of failing closed is that the world never loads at all and every
+    // page serves empty for good — much worse than the contention it prevents.
+    return true;
+  }
+}
+
+/** Let the next request start immediately rather than waiting out the lease. */
+async function releaseLease(env: EnsureEnv): Promise<void> {
+  await writeMeta(env, "bootstrap_lease", "0");
+}
+
+/**
  * Does the world look like somebody loaded it?
  *
- * Asking information_schema first — rather than `select from circles` — is what
- * separates "no schema" from "cannot reach the database right now": an
- * unreachable database throws, and the caller leaves it alone.
- *
- * Having the TABLE is not enough. The first deployment created all ten tables
- * and then landed **no rows**, so every page answered 200 with an empty list,
- * which is worse than an error because nothing looks wrong. A circles table
- * with zero rows means the data never arrived, so treat it as not-yet-built.
+ * Having the TABLE is not enough. One deployment created all ten tables and then
+ * landed **no rows**, so every page answered 200 with an empty list, which is
+ * worse than an error because nothing looks wrong. Ask the tables that come last
+ * in the load order too: a run that stopped part-way leaves `circles` populated
+ * and `bookings` empty.
  */
 async function looksPopulated(env: EnsureEnv): Promise<boolean> {
   const db = getDb(env);
-  if (!(await tableExists(env, "circles"))) return false;
-
-  // Not just circles. The deployed run stopped part-way and left circles
-  // populated but events, members and photos empty — and a circles-only check
-  // then treats that as "built" and never retries. Ask for the tables that come
-  // last in the load order too.
   const circles = scalar(await db.execute(sql`select count(*)::int from circles`));
   if (circles === 0) return false;
-
-  // Duplicates mean an earlier run inserted the same rows twice — which is what
-  // happens when the primary keys were never created, so ON CONFLICT DO NOTHING
-  // had nothing to conflict with. Rebuild: the load now clears each table first,
-  // so a rebuild restores exactly the seeded world.
-  const distinct = scalar(await db.execute(sql`select count(distinct id)::int from circles`));
-  if (distinct !== circles) return false;
   const events = scalar(await db.execute(sql`select count(*)::int from events`));
   if (events === 0) return false;
   return scalar(await db.execute(sql`select count(*)::int from bookings`)) > 0;
 }
 
 /**
- * Is the app's world already here, AND is it the world this deploy ships?
+ * Send statements in chunks, spending one round trip each, until the work is
+ * done or the budget is gone. Returns how far it got.
  *
- * The second half is the part that was missing. Every check above asks whether
- * the database looks UNBUILT, and a seed change does not make it look unbuilt:
- * when every circle and gathering gained a photograph and 123 gallery rows
- * gained an object key, production stayed fully populated, so nothing fired and
- * the live site served the old photo-less rows through deploy after deploy.
- *
- * `app_meta.seed_version` closes that gap. It is written at the end of a
- * rebuild and compared here, so "already built" means built from THIS seed.
- * Absent or stale — including on every database built before this marker
- * existed — is a rebuild.
+ * `batch` is all-or-nothing, so a chunk that fails is retried statement by
+ * statement — which costs a round trip per statement and is exactly how the old
+ * version burned 157 seconds. Here those retries come out of the same budget as
+ * everything else, so a failing chunk slows the load down but can no longer take
+ * the site with it.
  */
-async function worldExists(env: EnsureEnv): Promise<boolean> {
-  if (!(await looksPopulated(env))) return false;
-  const stored = await storedSeedVersion(env);
-  bootstrapReport.storedVersion = stored;
-  return stored === BOOTSTRAP_VERSION;
-}
-
-async function build(
+async function apply(
   env: EnsureEnv,
   statements: readonly string[],
-  { stampVersion = false }: { stampVersion?: boolean } = {},
-): Promise<void> {
-  const log = createLogger(env);
+  from: number,
+  budget: Budget,
+): Promise<number> {
   const db = getDb(env);
-  let applied = 0;
-  let failed = 0;
+  const asQuery = (statement: string) => ({
+    toSQL: () => ({ sql: statement, params: [] as unknown[] }),
+  });
+  let cursor = from;
 
-  /**
-   * Send the statements in CHUNKS, not one at a time.
-   *
-   * Each round trip to the data service is a subrequest, and a Worker gets a
-   * limited number per request. Executing 518 statements individually silently
-   * hit that ceiling on the deployed app: it got through users, circles and
-   * packages — 47 inserts — and then the request was cut off mid-run, leaving
-   * events, members, photos and bookings empty with no error recorded anywhere,
-   * because the isolate died before it could record one.
-   *
-   * `batch` from src/db.ts sends many statements in one round trip. It is
-   * all-or-nothing, so a chunk that fails is retried statement by statement to
-   * find out which one — costing subrequests only when something is wrong.
-   */
-  const CHUNK = 40;
-  const asQuery = (statement: string) => ({ toSQL: () => ({ sql: statement, params: [] as unknown[] }) });
-
-  for (let i = 0; i < statements.length; i += CHUNK) {
-    const chunk = statements.slice(i, i + CHUNK);
+  while (cursor < statements.length && !budget.spent) {
+    const chunk = statements.slice(cursor, cursor + CHUNK);
+    if (!budget.take()) break;
     try {
       await batch(env, chunk.map(asQuery));
-      applied += chunk.length;
+      cursor += chunk.length;
+      bootstrapReport.applied += chunk.length;
+      continue;
     } catch {
+      // Find out which statement in the chunk is unhappy, one at a time, and
+      // keep the ones that do work. Each costs a round trip from the budget.
       for (const statement of chunk) {
+        if (!budget.take()) return cursor;
         try {
           await db.execute(sql.raw(statement));
-          applied++;
+          bootstrapReport.applied++;
         } catch (err) {
-          failed++;
+          bootstrapReport.failed++;
           // Drizzle rewraps whatever the driver threw as "Failed query: <sql>",
           // which says nothing about WHY. The database's own words are on
-          // `cause`, and without them a deployed failure is undiagnosable: there
-          // is no console here and no way to run the statement by hand.
+          // `cause`, and without them a deployed failure is undiagnosable:
+          // there is no console here and no way to run the statement by hand.
           const cause = (err as { cause?: unknown } | undefined)?.cause;
           const reason = cause instanceof Error ? cause.message : cause ? String(cause) : "";
           const error = `${err instanceof Error ? err.message : String(err)}${reason ? ` | cause: ${reason}` : ""}`;
           if (bootstrapReport.failures.length < 8) {
-            bootstrapReport.failures.push({ statement: statement.slice(0, 200), error: error.slice(0, 400) });
-          }
-          if (failed <= 3) {
-            log.error("bootstrap statement failed", { statement: statement.slice(0, 120), err: error });
+            bootstrapReport.failures.push({
+              statement: statement.slice(0, 200),
+              error: error.slice(0, 400),
+            });
           }
         }
+        // Advance past a failure as well as a success. A statement rejected by
+        // this database will be rejected again next request, and stopping on it
+        // would stall the load for good.
+        cursor++;
       }
     }
   }
+  return cursor;
+}
 
-  bootstrapReport.ran = true;
-  bootstrapReport.applied = applied;
-  bootstrapReport.failed = failed;
-
-  /**
-   * Stamp the version — but only if the data actually landed.
-   *
-   * "Successful" cannot mean `failed === 0`. Re-running against a database that
-   * already has its constraints fails every `ALTER TABLE … ADD CONSTRAINT`, by
-   * design (see the generator), and gating the stamp on a clean run would mean
-   * the marker is never written on exactly the databases it exists for — so
-   * every request in every isolate would rebuild, forever.
-   *
-   * So ask the world instead of counting errors: if the rows are there, the
-   * rebuild did its job and this seed is what the database now holds.
-   */
-  // Only the DATA pass may stamp the version. The schema pass runs on every
-  // cold start, and stamping there marked the seed as current before the data
-  // had been loaded — so the load was then skipped as already done.
-  if (!stampVersion) return;
-
-  try {
-    if (await looksPopulated(env)) {
-      await writeSeedVersion(env);
-      bootstrapReport.storedVersion = BOOTSTRAP_VERSION;
-    } else {
-      log.error("bootstrap left the world empty; seed version not recorded", { applied, failed });
-    }
-  } catch (err) {
-    // A rebuild that worked but could not record itself will simply run again.
-    // Wasteful, not wrong — and far better than claiming a version that is not
-    // in the database.
-    log.error("could not record the seed version", {
-      err: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  log.info("database bootstrapped", {
-    applied,
-    failed,
-    total: BOOTSTRAP_STATEMENTS.length,
-    version: BOOTSTRAP_VERSION,
-  });
+/** `"<version>:<n>"` — a cursor is only meaningful for the seed that wrote it. */
+function readCursor(stored: string | null): number {
+  if (!stored) return 0;
+  const [version, n] = stored.split(":");
+  if (version !== BOOTSTRAP_VERSION) return 0;
+  const parsed = Number(n);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 /**
- * Call before serving anything that reads data. Cheap after the first request:
- * one `information_schema` count, then a resolved promise for the isolate's life.
+ * Do one bounded slice of the build. Returns true when the world is complete
+ * and this isolate never needs to look again.
+ *
+ * Every pass carries its own cursor in `app_meta`, so a request that runs out
+ * of budget mid-pass is resumed by the next one rather than starting over. That
+ * is not a nicety: with `batch` unavailable, a single pass costs one round trip
+ * per statement, and without cursors the schema pass would spend the whole
+ * budget every request and the data load would never begin at all. The test
+ * suite pins exactly that case.
  */
-export function ensureSchema(env: EnsureEnv): Promise<void> {
-  if (inFlight) return inFlight;
+async function step(env: EnsureEnv, budget: Budget): Promise<boolean> {
+  const log = createLogger(env);
 
-  inFlight = (async () => {
-    try {
-      // Create anything missing. Never alters what is already there.
-      await build(env, CREATE_STATEMENTS);
-      if (await worldExists(env)) return;
-      // The seed changed: drop and rebuild, because this database will not
-      // accept an ALTER. Then load the data and stamp the version.
-      await build(env, RESET_STATEMENTS);
-      await build(env, DATA_STATEMENTS, { stampVersion: true });
-    } catch (err) {
-      // Could not even ask — almost certainly the database being unreachable.
-      // Let the request fail normally and allow a later request to retry.
-      createLogger(env).warn("could not check the schema", {
-        err: err instanceof Error ? err.message : String(err),
-      });
-      inFlight = null;
+  /**
+   * Read the bookkeeping first, and let a failure mean "there is no schema
+   * yet". `app_meta` is the first statement in the create pass, so if it can be
+   * read the tables have been created at least once — and the create pass, 33
+   * statements that would otherwise be re-sent on every single request, can be
+   * skipped entirely. That read is the only cost of the steady state.
+   */
+  let storedVersion: string | null = null;
+  try {
+    storedVersion = await readMeta(env, "seed_version");
+  } catch {
+    // No `app_meta`, so nothing to resume and nowhere to record progress.
+    // Create the schema and stop there; the next request loads the data.
+    await apply(env, CREATE_STATEMENTS, 0, new Budget(CREATE_STATEMENTS.length + 2));
+    return false;
+  }
+
+  bootstrapReport.storedVersion = storedVersion;
+  if (storedVersion === BOOTSTRAP_VERSION) return true;
+
+  // Somebody else is already rebuilding. Serve the page instead of queueing up
+  // behind them — that queue is what turned one slow build into a dead site.
+  if (!(await claimLease(env))) return false;
+
+  try {
+    bootstrapReport.ran = true;
+
+    // The seed changed, so the shape may have changed too, and this database
+    // will not accept an ALTER. Drop and recreate — once per version, and only
+    // marked done when the pass has actually run to the end, so an interrupted
+    // rebuild is never mistaken for a finished one.
+    if ((await readMeta(env, "schema_version")) !== BOOTSTRAP_VERSION) {
+      const from = readCursor(await readMeta(env, "reset_cursor"));
+      const reached = await apply(env, RESET_STATEMENTS, from, budget);
+      await writeMeta(env, "reset_cursor", `${BOOTSTRAP_VERSION}:${reached}`);
+      if (reached < RESET_STATEMENTS.length) {
+        log.info("bootstrap rebuilding, will resume next request", {
+          reset: reached,
+          of: RESET_STATEMENTS.length,
+        });
+        return false;
+      }
+      await writeMeta(env, "schema_version", BOOTSTRAP_VERSION);
+      // The tables were just recreated empty, so any earlier data cursor is a
+      // claim about rows that no longer exist.
+      await writeMeta(env, "data_cursor", `${BOOTSTRAP_VERSION}:0`);
     }
-  })();
 
-  return inFlight;
+    const cursor = await apply(
+      env,
+      DATA_STATEMENTS,
+      readCursor(await readMeta(env, "data_cursor")),
+      budget,
+    );
+    await writeMeta(env, "data_cursor", `${BOOTSTRAP_VERSION}:${cursor}`);
+    bootstrapReport.cursor = cursor;
+
+    if (cursor < DATA_STATEMENTS.length) {
+      log.info("bootstrap paused, will resume next request", {
+        cursor,
+        total: DATA_STATEMENTS.length,
+      });
+      return false;
+    }
+
+    // Ask the world rather than counting errors. Re-running against a database
+    // that already has its constraints fails every `ADD CONSTRAINT` by design,
+    // so `failed === 0` is the wrong test for "did this work".
+    if (!(await looksPopulated(env))) {
+      log.error("bootstrap ran to the end and the world is still empty", {
+        applied: bootstrapReport.applied,
+        failed: bootstrapReport.failed,
+      });
+      return false;
+    }
+
+    await writeMeta(env, "seed_version", BOOTSTRAP_VERSION);
+    bootstrapReport.storedVersion = BOOTSTRAP_VERSION;
+    log.info("database bootstrapped", {
+      applied: bootstrapReport.applied,
+      failed: bootstrapReport.failed,
+      version: BOOTSTRAP_VERSION,
+    });
+    return true;
+  } finally {
+    await releaseLease(env);
+  }
+}
+
+/**
+ * Call before serving anything that reads data.
+ *
+ * Never throws and never blocks for long: the caller gets control back inside
+ * its budget whatever the database is doing, and renders the page with what is
+ * there. Free after the world is complete — one flag, no round trips.
+ */
+export async function ensureSchema(env: EnsureEnv): Promise<void> {
+  if (settled) return;
+  try {
+    if (await step(env, new Budget(ROUNDTRIP_BUDGET))) settled = true;
+  } catch (err) {
+    // Almost certainly the database being unreachable. Let the request carry on
+    // and let a later one retry; a blip must not take the page down with it.
+    createLogger(env).warn("could not build the schema", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Test seam: forget that this isolate ever checked. */
+export function resetEnsureSchemaForTests(): void {
+  settled = false;
 }
