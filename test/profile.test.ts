@@ -44,6 +44,9 @@ const RUN = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 const created: string[] = [];
 
 afterAll(async () => {
+  // No database in CI, so there is nothing to unwind — and running these
+  // deletes anyway fails the whole file before a single test is skipped.
+  if (!hasDatabase) return;
   if (hasDatabase && created.length > 0) {
     // Dependency order, by hand: the FKs from `passes` to `orders` and from
     // `bookings` to `passes` have no ON DELETE, so a cascade from `users` is
