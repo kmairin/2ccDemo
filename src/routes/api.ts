@@ -74,6 +74,36 @@ api.get("/health", async (c) => {
     const { bootstrapReport } = await import("../ensure-schema");
     return c.json({ status: "ok", bootstrap: bootstrapReport });
   }
+
+  // TEMPORARY diagnostic. Deployed there is no console and no way to run a
+  // query by hand, so when a page 500s the only alternative is guessing at the
+  // schema. Reports column names and the error text of the query the directory
+  // actually runs. No user data. Remove with the rest of the bootstrap
+  // scaffolding.
+  if (c.req.query("probe") === "1") {
+    const { getDb } = await import("../db");
+    const { sql } = await import("drizzle-orm");
+    const db = getDb(c.env);
+    const out: Record<string, unknown> = {};
+    try {
+      const cols = await db.execute(
+        sql`select "column_name" from "information_schema"."columns"
+            where "table_name" = 'circles' order by "column_name"`,
+      );
+      out.circleColumns = (cols as unknown as unknown[]).map((r) =>
+        Array.isArray(r) ? r[0] : Object.values(r as object)[0],
+      );
+    } catch (err) {
+      out.circleColumnsError = err instanceof Error ? err.message : String(err);
+    }
+    try {
+      const { listCircles } = await import("../services/circles");
+      out.listCircles = (await listCircles(c.env, { limit: 2 })).length;
+    } catch (err) {
+      out.listCirclesError = (err instanceof Error ? err.message : String(err)).slice(0, 400);
+    }
+    return c.json({ status: "ok", probe: out });
+  }
   return c.json({ status: "ok" });
 });
 

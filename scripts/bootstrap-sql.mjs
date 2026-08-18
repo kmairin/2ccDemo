@@ -254,16 +254,46 @@ const clears = [...TABLE_ORDER]
 const APP_META_DDL =
   'CREATE TABLE IF NOT EXISTS "public"."app_meta" ("key" text PRIMARY KEY, "value" text NOT NULL)';
 
+/**
+ * Unlock the tables for schema changes, then lock them again at the end.
+ *
+ * The deployed database keeps every table `schema_locked`. Any ALTER against
+ * one comes back with
+ *
+ *   this schema change is disallowed because table "bookings" is locked
+ *   and this operation cannot automatically unlock the table
+ *
+ * which is why `ALTER TABLE … ADD CONSTRAINT` has failed on this platform since
+ * the very first deploy — the reason the primary keys had to be moved inline —
+ * and why `ADD COLUMN` could not add `cover_key` to the live tables. Unlocking
+ * is the one operation the database does allow, so the schema changes are
+ * bracketed by it.
+ *
+ * `schema_locked` is a CockroachDB storage parameter. The local Postgres in
+ * INSTALL.md has no such thing and rejects these 20 statements, exactly as it
+ * would any other CockroachDB-only SQL. That is harmless: the caller retries a
+ * failed chunk statement by statement, and locally there is nothing to unlock.
+ */
+const TABLES = ddlBefore
+  .map((create) => (create.match(/CREATE TABLE IF NOT EXISTS "public"\."([^"]+)"/i) || [])[1])
+  .filter(Boolean);
+const unlocks = TABLES.map((t) => `ALTER TABLE "public"."${t}" SET (schema_locked = false)`);
+const relocks = TABLES.map((t) => `ALTER TABLE "public"."${t}" SET (schema_locked = true)`);
+
 const ordered = [
   APP_META_DDL,
   ...ddlBefore,
-  // Straight after CREATE TABLE, and before anything touches a row: an INSERT
-  // naming a column the deployed table has never had is the failure this list
-  // exists to prevent.
+  // After CREATE TABLE, so a table that did not exist a moment ago can be
+  // unlocked too, and before anything that alters one.
+  ...unlocks,
+  // Before anything touches a row: an INSERT naming a column the deployed table
+  // has never had is the failure this list exists to prevent.
   ...addColumns,
   ...clears,
   ...orderedInserts,
   ...ddlAfter,
+  // Last, once every constraint and index is in place.
+  ...relocks,
 ];
 
 /**
