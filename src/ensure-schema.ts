@@ -87,6 +87,13 @@ async function worldExists(env: EnsureEnv): Promise<boolean> {
   // last in the load order too.
   const circles = scalar(await db.execute(sql`select count(*)::int from circles`));
   if (circles === 0) return false;
+
+  // Duplicates mean an earlier run inserted the same rows twice — which is what
+  // happens when the primary keys were never created, so ON CONFLICT DO NOTHING
+  // had nothing to conflict with. Rebuild: the load now clears each table first,
+  // so a rebuild restores exactly the seeded world.
+  const distinct = scalar(await db.execute(sql`select count(distinct id)::int from circles`));
+  if (distinct !== circles) return false;
   const events = scalar(await db.execute(sql`select count(*)::int from events`));
   if (events === 0) return false;
   return scalar(await db.execute(sql`select count(*)::int from bookings`)) > 0;

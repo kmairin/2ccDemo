@@ -113,12 +113,20 @@ const statements = splitStatements(sqlOnly)
  * With it, a re-run is a no-op instead of a mess.
  */
 const idempotent = statements.map((s) => {
-  if (/^CREATE TABLE /i.test(s)) return s.replace(/^CREATE TABLE /i, "CREATE TABLE IF NOT EXISTS ");
+  if (/^CREATE TABLE /i.test(s)) {
+    // Every table in this schema is keyed on "id". Declaring it inline means the
+    // key exists even where a separate ALTER would not run, which is what makes
+    // ON CONFLICT DO NOTHING actually do something.
+    const withPk = s.replace(/\n\);?\s*$/, ',\n    PRIMARY KEY ("id")\n)');
+    return withPk.replace(/^CREATE TABLE /i, "CREATE TABLE IF NOT EXISTS ");
+  }
   if (/^CREATE UNIQUE INDEX /i.test(s))
     return s.replace(/^CREATE UNIQUE INDEX /i, "CREATE UNIQUE INDEX IF NOT EXISTS ");
   if (/^CREATE INDEX /i.test(s)) return s.replace(/^CREATE INDEX /i, "CREATE INDEX IF NOT EXISTS ");
   if (/^INSERT INTO /i.test(s)) return `${s} ON CONFLICT DO NOTHING`;
-  // ALTER TABLE ... ADD CONSTRAINT has no IF NOT EXISTS; make it conditional.
+  // ALTER TABLE ... ADD CONSTRAINT has no IF NOT EXISTS. It is left as plain SQL
+  // and allowed to fail on a re-run: the caller retries a failed chunk
+  // statement by statement, so an already-present constraint costs nothing.
   const constraint = s.match(/^ALTER TABLE ONLY "([^"]+)"\."([^"]+)"\s+ADD CONSTRAINT "([^"]+)"/i);
   if (constraint) {
     const [, schema, table, name] = constraint;
@@ -126,9 +134,7 @@ const idempotent = statements.map((s) => {
     // SQLSTATEs depending on kind (primary key, unique, foreign key), and a
     // half-caught set leaves expected noise in the failure report that would
     // hide a real problem. These statements are purely "make sure this exists".
-    return `DO $$ BEGIN ${s}; EXCEPTION WHEN others THEN NULL; END $$`
-      .replace(/\s+/g, " ")
-      .replace("__NAME__", `${schema}.${table}.${name}`);
+    return s.replace(/\s+/g, " ");
   }
   return s;
 });
@@ -172,7 +178,14 @@ const orderedInserts = inserts
   .map((x) => x.s);
 
 // Constraints last, so the data is already consistent when they are enforced.
-const ordered = [...ddlBefore, ...orderedInserts, ...ddlAfter];
+const clears = [...TABLE_ORDER]
+  .reverse()
+  .map((t) => `DELETE FROM "public"."${t}"`)
+  // Sessions belong to whoever is signed in right now; clearing them would sign
+  // every visitor out on a rebuild.
+  .filter((s) => !s.includes('"sessions"'));
+
+const ordered = [...ddlBefore, ...clears, ...orderedInserts, ...ddlAfter];
 
 const kinds = {};
 for (const s of ordered) {
