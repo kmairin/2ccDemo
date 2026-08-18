@@ -163,6 +163,13 @@ export const bootstrapReport: {
   total: number;
   /** Set when a request stopped early because it ran out of budget. */
   budgetExhausted: boolean;
+  /**
+   * How long each round trip took, deployed. The budget bounds the WORK loop,
+   * and the first two attempts at this fix both failed because the time was
+   * being spent somewhere else entirely — thirty-three seconds with `applied`
+   * and `failed` both zero. Numbers beat another guess.
+   */
+  timings: { step: string; ms: number }[];
   failures: { statement: string; error: string }[];
 } = {
   ran: false,
@@ -173,6 +180,7 @@ export const bootstrapReport: {
   cursor: 0,
   total: DATA_STATEMENTS.length,
   budgetExhausted: false,
+  timings: [],
   failures: [],
 };
 
@@ -206,6 +214,18 @@ class Budget {
   }
 }
 
+/** Time one round trip into the report, so a slow call names itself. */
+async function timed<T>(step: string, run: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    return await run();
+  } finally {
+    if (bootstrapReport.timings.length < 24) {
+      bootstrapReport.timings.push({ step, ms: Date.now() - started });
+    }
+  }
+}
+
 /** First column of the first row, as text. `null` when there is no row. */
 function firstText(rows: unknown): string | null {
   const first: unknown = (rows as unknown[])[0];
@@ -221,16 +241,20 @@ function scalar(rows: unknown): number {
 
 /** Read one `app_meta` key. `null` when the table or the row is absent. */
 async function readMeta(env: EnsureEnv, key: string): Promise<string | null> {
-  return firstText(
-    await getDb(env).execute(sql`select "value" from "app_meta" where "key" = ${key}`),
+  return timed(`read:${key}`, async () =>
+    firstText(
+      await getDb(env).execute(sql`select "value" from "app_meta" where "key" = ${key}`),
+    ),
   );
 }
 
 /** Write one `app_meta` key. Upsert: a rebuild may be this database's tenth. */
 async function writeMeta(env: EnsureEnv, key: string, value: string): Promise<void> {
-  await getDb(env).execute(
+  await timed(`write:${key}`, async () =>
+    getDb(env).execute(
     sql`insert into "app_meta" ("key", "value") values (${key}, ${value})
         on conflict ("key") do update set "value" = excluded."value"`,
+    ),
   );
 }
 
@@ -247,11 +271,13 @@ async function writeMeta(env: EnsureEnv, key: string, value: string): Promise<vo
 async function claimLease(env: EnsureEnv): Promise<boolean> {
   const now = Date.now();
   try {
-    const rows = await getDb(env).execute(
+    const rows = await timed("lease", async () =>
+      getDb(env).execute(
       sql`insert into "app_meta" ("key", "value") values ('bootstrap_lease', ${String(now + LEASE_MS)})
           on conflict ("key") do update set "value" = excluded."value"
           where "app_meta"."value" < ${String(now)}
           returning "key"`,
+      ),
     );
     return (rows as unknown as unknown[]).length > 0;
   } catch {
@@ -313,7 +339,7 @@ async function apply(
     const chunk = statements.slice(cursor, cursor + CHUNK);
     if (!budget.take()) break;
     try {
-      await batch(env, chunk.map(asQuery));
+      await timed(`batch@${cursor}`, () => batch(env, chunk.map(asQuery)));
       cursor += chunk.length;
       bootstrapReport.applied += chunk.length;
       continue;
@@ -477,7 +503,28 @@ export async function ensureSchema(env: EnsureEnv): Promise<void> {
   if (settled) return;
   try {
     const deadline = Date.now() + DEADLINE_MS;
-    if (await step(env, new Budget(ROUNDTRIP_BUDGET, deadline), deadline)) settled = true;
+
+    /**
+     * The deadline is enforced HERE, around everything, not only inside the
+     * work loop.
+     *
+     * Checking it before each statement was not enough: deployed, this spent
+     * thirty-three seconds with `applied` and `failed` both zero, because the
+     * time went to the bookkeeping round trips either side of the loop — the
+     * lease, the cursor reads, the cursor write — and none of those passed
+     * through the budget. Racing the whole thing is the only bound that does
+     * not depend on guessing which call is the slow one.
+     *
+     * Losing the race abandons the attempt, not the progress: every pass
+     * records how far it got, so the next request resumes. The page is what
+     * matters, and the page now gets control back on time whatever the
+     * database is doing.
+     */
+    const finished = await Promise.race([
+      step(env, new Budget(ROUNDTRIP_BUDGET, deadline), deadline),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), DEADLINE_MS)),
+    ]);
+    if (finished) settled = true;
   } catch (err) {
     // Almost certainly the database being unreachable. Let the request carry on
     // and let a later one retry; a blip must not take the page down with it.

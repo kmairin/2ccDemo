@@ -117,6 +117,16 @@ async function asProduction(): Promise<void> {
   bootstrapReport.failures.length = 0;
 }
 
+/**
+ * Let an abandoned attempt finish before the next test starts.
+ *
+ * Losing the deadline race abandons the promise but does not stop it — it keeps
+ * running against the same database, and it was still writing rows when the
+ * next test began, which failed a test that was behaving perfectly. Once the
+ * slow-trip delay is cleared it drains in milliseconds; this just waits for it.
+ */
+const drain = () => new Promise((r) => setTimeout(r, 2_000));
+
 const rows = async (table: string): Promise<number> =>
   Number((await client.unsafe(`select count(*)::int as n from ${table}`))[0].n);
 
@@ -212,6 +222,35 @@ describe.runIf(available)("the deployed bootstrap", () => {
     } finally {
       batchAlwaysFails.on = false;
       slowTripMs.ms = 0;
+      await drain();
+    }
+  }, 60_000);
+
+  it("returns on time even when the slow calls are the bookkeeping ones", async () => {
+    /**
+     * The failure this pins is the one that survived two fixes.
+     *
+     * Deployed, `ensureSchema` took thirty-three seconds with `applied` and
+     * `failed` both ZERO — no statement of real work was attempted at all. The
+     * time went to the round trips either side of the work loop: the lease, the
+     * cursor reads, the cursor write. A deadline checked before each statement
+     * cannot see any of those, so it bounded nothing.
+     *
+     * So this leaves `app_meta` in place, exactly as production has it, which
+     * sends the code down the bookkeeping-heavy path rather than the create
+     * path the test above takes.
+     */
+    await asProduction();
+    resetEnsureSchemaForTests();
+    slowTripMs.ms = 1_500; // six bookkeeping trips would be nine seconds
+    try {
+      const before = Date.now();
+      await ensureSchema(env);
+      const elapsed = Date.now() - before;
+      expect(elapsed).toBeLessThan(9_000);
+    } finally {
+      slowTripMs.ms = 0;
+      await drain();
     }
   }, 60_000);
 
