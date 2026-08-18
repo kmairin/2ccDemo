@@ -267,6 +267,38 @@ describe.runIf(available)("the deployed bootstrap", () => {
     expect(version).toBe(bootstrapReport.version);
   });
 
+  it("loads the data without dropping tables when the shape is already right", async () => {
+    /**
+     * Production's exact situation, and the one that kept it empty: every table
+     * present with every column, no rows, and a seed version that did not
+     * match. That mismatch was being read as "rebuild", and a batch containing
+     * `DROP TABLE` never returns on the deployed database — so the request hung
+     * and the data never arrived.
+     *
+     * A row in `sessions` proves it: the rebuild drops that table and nothing
+     * reloads it, so if the row is still there afterwards, nothing was dropped.
+     */
+    await asProduction();
+    await client.unsafe(
+      `insert into users (id, email, name) values ('u-keep', 'keep@2cc.club', 'Keep')`,
+    );
+    await client.unsafe(
+      `insert into sessions (id, user_id, expires_at)
+       values ('s-keep', 'u-keep', now() + interval '1 day')`,
+    );
+
+    resetEnsureSchemaForTests();
+    await ensureSchema(env);
+
+    expect(await rows("sessions")).toBe(1); // nothing was dropped
+    expect(await rows("circles")).toBe(6); // and the data still landed
+    expect(await rows("events")).toBe(23);
+    const reset = (
+      await client.unsafe(`select value from app_meta where key = 'reset_cursor'`)
+    )[0]?.value;
+    expect(reset).toBeUndefined(); // the rebuild never even started
+  });
+
   it("costs nothing once the world is complete", async () => {
     await asProduction();
     await ensureSchema(env);

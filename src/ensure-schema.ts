@@ -101,6 +101,27 @@ const RESET_STATEMENTS = [
 const DATA_STATEMENTS = BOOTSTRAP_STATEMENTS.filter(isDataStatement);
 
 /**
+ * Which columns each table is supposed to have, read out of the CREATE TABLE
+ * statements themselves so it cannot drift from the bundle.
+ */
+const EXPECTED_COLUMNS: Map<string, string[]> = new Map(
+  BOOTSTRAP_STATEMENTS.filter(isCreateTable).map((statement) => {
+    const table = /CREATE TABLE (?:IF NOT EXISTS )?"public"\."(\w+)"/i.exec(statement)?.[1] ?? "";
+    const body = statement.slice(statement.indexOf("(") + 1);
+    const columns: string[] = [];
+    for (const line of body.split("\n")) {
+      const trimmed = line.trim();
+      // A column definition opens with the quoted column name. Table-level
+      // constraints (PRIMARY KEY, CONSTRAINT …) do not, so they are skipped.
+      if (!trimmed.startsWith('"')) continue;
+      const name = /^"(\w+)"/.exec(trimmed)?.[1];
+      if (name) columns.push(name);
+    }
+    return [table, columns] as [string, string[]];
+  }),
+);
+
+/**
  * How many round trips one request may spend building the database.
  *
  * The number that matters is not this one but the one it protects: a Worker's
@@ -296,6 +317,41 @@ async function releaseLease(env: EnsureEnv): Promise<void> {
 }
 
 /**
+ * Is anything the bundle declares actually missing from this database?
+ *
+ * This is the question the seed version was standing in for, and standing in
+ * badly. A seed change bumps the version whether or not the SHAPE changed, and
+ * the answer was used to justify dropping every table — on a database where a
+ * batch of `DROP TABLE` never returns at all. Deployed, that hang was the whole
+ * outage: the bookkeeping around it took 247ms and the drop took forever.
+ *
+ * So ask the real question, in one round trip. Nothing missing means nothing to
+ * rebuild, and the data can simply be loaded into the tables already there.
+ */
+async function missingColumns(env: EnsureEnv): Promise<string[]> {
+  const rows = (await timed("columns", async () =>
+    getDb(env).execute(
+      sql`select "table_name", "column_name" from "information_schema"."columns"
+          where "table_schema" = 'public'`,
+    ),
+  )) as unknown as unknown[];
+
+  const present = new Set<string>();
+  for (const row of rows) {
+    const [table, column] = Array.isArray(row) ? row : Object.values(row as object);
+    present.add(`${String(table)}.${String(column)}`);
+  }
+
+  const missing: string[] = [];
+  for (const [table, columns] of EXPECTED_COLUMNS) {
+    for (const column of columns) {
+      if (!present.has(`${table}.${column}`)) missing.push(`${table}.${column}`);
+    }
+  }
+  return missing;
+}
+
+/**
  * Does the world look like somebody loaded it?
  *
  * Having the TABLE is not enough. One deployment created all ten tables and then
@@ -328,6 +384,7 @@ async function apply(
   statements: readonly string[],
   from: number,
   budget: Budget,
+  { oneAtATime = false }: { oneAtATime?: boolean } = {},
 ): Promise<number> {
   const db = getDb(env);
   const asQuery = (statement: string) => ({
@@ -336,9 +393,21 @@ async function apply(
   let cursor = from;
 
   while (cursor < statements.length && !budget.spent) {
-    const chunk = statements.slice(cursor, cursor + CHUNK);
+    const chunk = statements.slice(cursor, oneAtATime ? cursor + 1 : cursor + CHUNK);
     if (!budget.take()) break;
     try {
+      /**
+       * DDL never goes in a batch.
+       *
+       * A batch is one transaction, and a transaction containing `DROP TABLE`
+       * simply never returns on the deployed database — the request that sent
+       * one sat there until it was abandoned, with the timing report showing
+       * 247ms of bookkeeping either side and nothing at all for the drop. The
+       * schema passes therefore send one statement at a time, which is the only
+       * shape of DDL this database has ever accepted. Data is ordinary DML and
+       * batches perfectly well.
+       */
+      if (oneAtATime) throw new Error("ddl is sent one statement at a time");
       await timed(`batch@${cursor}`, () => batch(env, chunk.map(asQuery)));
       cursor += chunk.length;
       bootstrapReport.applied += chunk.length;
@@ -416,7 +485,9 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
     // Its own trip allowance, because the create pass must be able to finish
     // even when every statement costs a trip of its own — but the SAME
     // deadline, so a slow database cannot turn it into a ninety-second page.
-    await apply(env, CREATE_STATEMENTS, 0, new Budget(CREATE_STATEMENTS.length + 2, deadline));
+    await apply(env, CREATE_STATEMENTS, 0, new Budget(CREATE_STATEMENTS.length + 2, deadline), {
+      oneAtATime: true,
+    });
     return false;
   }
 
@@ -435,20 +506,36 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
     // marked done when the pass has actually run to the end, so an interrupted
     // rebuild is never mistaken for a finished one.
     if ((await readMeta(env, "schema_version")) !== BOOTSTRAP_VERSION) {
-      const from = readCursor(await readMeta(env, "reset_cursor"));
-      const reached = await apply(env, RESET_STATEMENTS, from, budget);
-      await writeMeta(env, "reset_cursor", `${BOOTSTRAP_VERSION}:${reached}`);
-      if (reached < RESET_STATEMENTS.length) {
-        log.info("bootstrap rebuilding, will resume next request", {
-          reset: reached,
-          of: RESET_STATEMENTS.length,
+      const missing = await missingColumns(env);
+      if (missing.length === 0) {
+        // The tables already have every column this bundle declares, so there
+        // is nothing a rebuild would achieve — and rebuilding is the one thing
+        // this database will not do. Record the shape as current and go and
+        // load the data, which is all that was ever actually missing.
+        log.info("schema already matches the bundle; skipping the rebuild", {
+          tables: EXPECTED_COLUMNS.size,
         });
-        return false;
+        await writeMeta(env, "schema_version", BOOTSTRAP_VERSION);
+      } else {
+        log.info("rebuilding: the deployed schema is missing columns", {
+          missing: missing.slice(0, 8).join(", "),
+          count: missing.length,
+        });
+        const from = readCursor(await readMeta(env, "reset_cursor"));
+        const reached = await apply(env, RESET_STATEMENTS, from, budget, { oneAtATime: true });
+        await writeMeta(env, "reset_cursor", `${BOOTSTRAP_VERSION}:${reached}`);
+        if (reached < RESET_STATEMENTS.length) {
+          log.info("bootstrap rebuilding, will resume next request", {
+            reset: reached,
+            of: RESET_STATEMENTS.length,
+          });
+          return false;
+        }
+        await writeMeta(env, "schema_version", BOOTSTRAP_VERSION);
+        // The tables were just recreated empty, so any earlier data cursor is a
+        // claim about rows that no longer exist.
+        await writeMeta(env, "data_cursor", `${BOOTSTRAP_VERSION}:0`);
       }
-      await writeMeta(env, "schema_version", BOOTSTRAP_VERSION);
-      // The tables were just recreated empty, so any earlier data cursor is a
-      // claim about rows that no longer exist.
-      await writeMeta(env, "data_cursor", `${BOOTSTRAP_VERSION}:0`);
     }
 
     const cursor = await apply(
