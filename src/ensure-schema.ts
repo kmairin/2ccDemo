@@ -212,9 +212,15 @@ async function build(env: EnsureEnv): Promise<void> {
           applied++;
         } catch (err) {
           failed++;
-          const error = err instanceof Error ? err.message : String(err);
+          // Drizzle rewraps whatever the driver threw as "Failed query: <sql>",
+          // which says nothing about WHY. The database's own words are on
+          // `cause`, and without them a deployed failure is undiagnosable: there
+          // is no console here and no way to run the statement by hand.
+          const cause = (err as { cause?: unknown } | undefined)?.cause;
+          const reason = cause instanceof Error ? cause.message : cause ? String(cause) : "";
+          const error = `${err instanceof Error ? err.message : String(err)}${reason ? ` | cause: ${reason}` : ""}`;
           if (bootstrapReport.failures.length < 8) {
-            bootstrapReport.failures.push({ statement: statement.slice(0, 200), error });
+            bootstrapReport.failures.push({ statement: statement.slice(0, 200), error: error.slice(0, 400) });
           }
           if (failed <= 3) {
             log.error("bootstrap statement failed", { statement: statement.slice(0, 120), err: error });
