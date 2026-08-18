@@ -45,9 +45,14 @@ export type LayoutProps = {
 type NavItem = { key: string; label: string; href: string };
 
 const NAV: readonly NavItem[] = [
-  { key: "circles", label: "Circles", href: "/circles" },
-  { key: "gatherings", label: "Gatherings", href: "/events" },
+  // The owner's words, not invented ones, and every surface reachable by
+  // clicking. Countries, cities, search and profiles all existed and none of
+  // them were in the header, so none of them could be found.
+  { key: "countries", label: "Countries", href: "/countries" },
+  { key: "circles", label: "Communities", href: "/circles" },
+  { key: "gatherings", label: "Events", href: "/events" },
   { key: "calendar", label: "Calendar", href: "/calendar" },
+  { key: "search", label: "Search", href: "/search" },
 ];
 
 /** First name only — the header has room for one word, not a full name. */
