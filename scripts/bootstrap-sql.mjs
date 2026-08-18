@@ -81,7 +81,7 @@ const raw = execFileSync(
     "--no-owner",
     "--no-privileges",
     "--no-comments",
-    "--inserts",
+    "--column-inserts",
     "--quote-all-identifiers",
     // Sessions are per-browser and must not be copied into production.
     // The TABLE still has to exist, so only its DATA is excluded.
@@ -173,6 +173,47 @@ function tableOf(statement) {
 }
 
 const ddlBefore = idempotent.filter((s) => /^CREATE TABLE/i.test(s));
+
+/**
+ * `ALTER TABLE … ADD COLUMN IF NOT EXISTS` for every column of every table.
+ *
+ * On a fresh database these are all no-ops — CREATE TABLE already made the
+ * columns. On a database created by an EARLIER version of this file they are the
+ * only way a newly added column ever arrives, because CREATE TABLE IF NOT EXISTS
+ * skips an existing table entirely.
+ *
+ * Deliberately nullable and default-less: the table may still hold rows when
+ * these run, and `ADD COLUMN … NOT NULL` without a default would fail on a
+ * non-empty table. The CREATE TABLE above carries the real constraints for any
+ * database built from scratch.
+ */
+const addColumns = [];
+for (const create of ddlBefore) {
+  const table = (create.match(/CREATE TABLE IF NOT EXISTS "public"\."([^"]+)"/i) || [])[1];
+  if (!table) continue;
+  const body = create.slice(create.indexOf("(") + 1, create.lastIndexOf(")"));
+  for (const line of body.split("\n")) {
+    const trimmed = line.trim();
+    if (/^(PRIMARY|CONSTRAINT|UNIQUE|FOREIGN|CHECK)/i.test(trimmed)) continue;
+    const m = trimmed.match(/^"([a-z_]+)"\s+(.+?),?$/i);
+    if (!m) continue;
+    // Take the TYPE and stop. Matching the type with a character class instead
+    // ran straight past it: `[a-z ]+` under /i swallowed the keywords too, and
+    // `timestamp with time zone DEFAULT "now"() NOT NULL` came out as
+    // `timestamp with time zone DEFAULT "` — 24 of 85 statements were malformed,
+    // failing on a syntax error or on ADD COLUMN … NOT NULL against a table that
+    // still had rows. Those are exactly the columns a future migration would
+    // need to add, and they would have failed silently.
+    const type = m[2]
+      .split(/\s+DEFAULT\s+/i)[0]
+      .replace(/\s+NOT\s+NULL\s*$/i, "")
+      .replace(/\s+NULL\s*$/i, "")
+      .trim();
+    if (!type) continue;
+    addColumns.push(`ALTER TABLE "public"."${table}" ADD COLUMN IF NOT EXISTS "${m[1]}" ${type}`);
+  }
+}
+
 const inserts = idempotent.filter((s) => /^INSERT INTO/i.test(s));
 const ddlAfter = idempotent.filter((s) => !/^CREATE TABLE/i.test(s) && !/^INSERT INTO/i.test(s));
 
@@ -213,7 +254,17 @@ const clears = [...TABLE_ORDER]
 const APP_META_DDL =
   'CREATE TABLE IF NOT EXISTS "public"."app_meta" ("key" text PRIMARY KEY, "value" text NOT NULL)';
 
-const ordered = [APP_META_DDL, ...ddlBefore, ...clears, ...orderedInserts, ...ddlAfter];
+const ordered = [
+  APP_META_DDL,
+  ...ddlBefore,
+  // Straight after CREATE TABLE, and before anything touches a row: an INSERT
+  // naming a column the deployed table has never had is the failure this list
+  // exists to prevent.
+  ...addColumns,
+  ...clears,
+  ...orderedInserts,
+  ...ddlAfter,
+];
 
 /**
  * A fingerprint of everything above.
