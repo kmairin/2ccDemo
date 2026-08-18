@@ -327,7 +327,7 @@ hr { border:0; border-top:1px solid var(--line); margin:0; }
 
 /* Inline actions were measured at 15–25px tall. Grow the hit area without moving
    a pixel of the layout (§10.4). */
-.cal-entry a, .ledger-row a, .ledger-cell a, .acct-row a, .table a, .stack-rows a {
+.cal-entry a, .ledger-row a, .ledger-cell a, .acct-row a, .table a, .stack-rows a, .person a {
   display:inline-flex; align-items:center; min-height:44px;
   margin-block:-10px; margin-inline:-8px; padding-inline:8px;
 }
@@ -720,6 +720,69 @@ body.has-actionbar .site-main { padding-block-end:0; }
 .filter:hover { color:var(--ink-2); }
 .filter[aria-current='page'] { color:var(--ink); border-block-end-color:var(--accent); }
 
+/* The tally beside a country or a city. A numeral in the machine face is
+   permitted accent (§2); the row it sits in is still hairline and still not a
+   pill. .18em is the label's tracking and it makes two digits read as two
+   words, so the numeral takes the index numeral's .08em instead. */
+.filter-count {
+  margin-inline-start:6px;
+  font-family:var(--mono); font-weight:500; font-size:var(--t-micro);
+  letter-spacing:.08em; color:var(--ink-faint);
+}
+.filter:hover .filter-count { color:var(--ink-3); }
+.filter[aria-current='page'] .filter-count { color:var(--accent); }
+
+/* Three rows (country, city, category) stack, each named, so the reader can
+   tell which axis they are on without reading the values. */
+.filter-stack { display:grid; gap:var(--s5); margin-block-end:var(--s6); }
+.filter-group { display:grid; gap:var(--s2); }
+.filter-legend { color:var(--ink-faint); }
+
+/* ---------- search (one field, in the page body) ---------- */
+
+.searchbar { display:flex; flex-wrap:wrap; align-items:flex-end; gap:var(--s4); max-width:var(--measure); }
+/* The rounded inset WebKit gives a search field ignores min-height, so the
+   48px touch target needs the native appearance off. The clear button goes
+   with it, which suits a product whose one rule is edges, not chrome (§2). */
+.searchbar-input { -webkit-appearance:none; appearance:none; flex:1 1 240px; min-width:0; }
+.searchbar-input::-webkit-search-decoration { -webkit-appearance:none; }
+.searchbar .btn { flex:none; }
+.searchbar-hint { flex:1 0 100%; color:var(--ink-faint); }
+
+/* ---------- geography (the country index and the place pages) ---------- */
+
+/* A printed index, not tiles: shared hairlines, opaque rows, square corners. */
+.geo-index { display:grid; gap:1px; }
+.geo-index > * { min-width:0; box-shadow:0 0 0 1px var(--line); }
+.geo-row {
+  display:grid; gap:var(--s4); align-items:start;
+  padding:var(--s5); background:var(--card);
+  transition:background-color 160ms ease-out;
+}
+.geo-row:hover { background:var(--paper-2); }
+.geo-main { min-width:0; display:grid; gap:var(--s2); }
+.geo-cities {
+  display:flex; flex-wrap:wrap; align-items:center;
+  font-size:var(--t-meta); line-height:1.4; color:var(--ink-3);
+}
+.geo-cities a { border-block-end:1px solid transparent; }
+.geo-cities a:hover { color:var(--ink); border-block-end-color:var(--accent); }
+.geo-counts { display:flex; flex-wrap:wrap; gap:var(--s3) var(--s6); }
+.geo-counts > div { min-width:0; }
+.geo-counts dd { margin-block-start:var(--s1); font-size:var(--t-lede); line-height:1; color:var(--ink); }
+.geo-up {
+  display:inline-flex; align-items:center; min-height:44px;
+  color:var(--ink-3); border-block-end:1px solid var(--accent-hair);
+}
+/* A group on the search page that matched nothing, beside groups that did.
+   One rule and one quiet line — a full empty state outweighed the results. */
+.group-empty { color:var(--ink-faint); border-block-start:1px solid var(--line); padding-block-start:var(--s4); }
+.geo-up:hover { color:var(--ink); border-block-end-color:var(--accent); }
+@media (min-width:720px) {
+  .geo-row { grid-template-columns:minmax(0,1fr) auto; align-items:center; }
+  .geo-counts { justify-content:flex-end; }
+}
+
 /* ---------- fields (§5 Join: bare ink, a rule under each input) ---------- */
 
 .field { display:block; }
@@ -1062,6 +1125,10 @@ fieldset[disabled] input { color:var(--ink-3); border-block-end-style:dashed; }
 .nav-link--plain:hover { color:var(--accent-2); }
 .nav-panel .nav-link--plain { min-height:48px; width:100%; }
 
-.action-sidebar { display:none; }
-@media (min-width:900px) { .action-sidebar { display:block; } }
+/* The action area must exist at every width. Hiding it below 900px left the
+   sticky bar pointing at #reserve — an element that was not rendered — so the
+   whole purchase flow was unreachable on a phone. On mobile it sits in the page
+   flow; the fixed bar is a shortcut to it, not a replacement for it. */
+.action-sidebar { display:block; margin-block-start:var(--s6); }
+@media (min-width:900px) { .action-sidebar { margin-block-start:0; } }
 `;

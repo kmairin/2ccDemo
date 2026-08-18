@@ -6,10 +6,17 @@
  * open-coded, so the directory, the gathering page and the calendar all print
  * the same number.
  */
-import { and, asc, eq, gte, lt, type SQL } from "drizzle-orm";
+import { and, asc, eq, gte, ilike, lt, or, type SQL } from "drizzle-orm";
 import { getDb, type DatabaseEnv } from "../db";
 import { circles, events, photos, type EventStatus } from "../schema";
-import { boundLimit, confirmedBookingCount, placesLeft, utcDateKey } from "./common";
+import {
+  boundLimit,
+  confirmedBookingCount,
+  likeContains,
+  likeExact,
+  placesLeft,
+  utcDateKey,
+} from "./common";
 import type { PhotoPlate } from "./circles";
 
 /** A gathering as a card shows it. Matches the contract's list item. */
@@ -109,14 +116,74 @@ function toSummary(row: SummaryRow): EventSummary {
   };
 }
 
-/** Published only, soonest first. `circleSlug` narrows it to one circle. */
+/**
+ * Published only, soonest first.
+ *
+ * `circleSlug` narrows it to one circle. `city` is where the gathering is
+ * actually held; `country` is the country of the circle that runs it, because
+ * `events` carries no country of its own — the one definition of a place, set
+ * out in `./common`. `from` drops anything that has already started, in SQL,
+ * so a count taken from this list is a count of what is still to come.
+ *
+ * All four compose, and all four are parameterised through Drizzle. Neither
+ * city nor country can be validated against a fixed list: they come from the
+ * data, so a name nothing answers to is an empty list, not an error.
+ */
 export async function listEvents(
   env: DatabaseEnv,
-  options: { circleSlug?: string; limit?: number } = {},
+  options: {
+    circleSlug?: string;
+    city?: string;
+    country?: string;
+    from?: Date;
+    limit?: number;
+  } = {},
 ): Promise<EventSummary[]> {
   const db = getDb(env);
   const filters: SQL[] = [eq(events.status, "published")];
   if (options.circleSlug) filters.push(eq(circles.slug, options.circleSlug));
+  if (options.city) filters.push(ilike(events.city, likeExact(options.city)));
+  if (options.country) filters.push(ilike(circles.country, likeExact(options.country)));
+  if (options.from) filters.push(gte(events.startsAt, options.from));
+
+  const rows = await db
+    .select(summaryColumns)
+    .from(events)
+    .innerJoin(circles, eq(circles.id, events.circleId))
+    .where(and(...filters))
+    .orderBy(asc(events.startsAt), asc(events.slug))
+    .limit(boundLimit(options.limit));
+  return rows.map(toSummary);
+}
+
+/**
+ * Free-text search over the gatherings: title, summary, city, and the country
+ * of the circle that runs it, so "Thailand" finds the evening in Bangkok.
+ * Published only, soonest first — a search result you cannot book is noise.
+ *
+ * `ilike` binds every pattern as a parameter; nothing here is concatenated
+ * into SQL (AGENTS.md §5).
+ */
+export async function searchEvents(
+  env: DatabaseEnv,
+  term: string,
+  options: { from?: Date; limit?: number } = {},
+): Promise<EventSummary[]> {
+  const trimmed = term.trim();
+  if (trimmed === "") return [];
+  const pattern = likeContains(trimmed);
+  const db = getDb(env);
+
+  const filters: SQL[] = [eq(events.status, "published")];
+  if (options.from) filters.push(gte(events.startsAt, options.from));
+  const matched = or(
+    ilike(events.title, pattern),
+    ilike(events.summary, pattern),
+    ilike(events.city, pattern),
+    ilike(events.venue, pattern),
+    ilike(circles.country, pattern),
+  );
+  if (matched) filters.push(matched);
 
   const rows = await db
     .select(summaryColumns)

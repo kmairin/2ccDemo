@@ -46,8 +46,20 @@ import {
   type CircleCategory,
   type MembershipStatus,
 } from "../schema";
-import { getCircleBySlug, isCircleHost, listCirclePhotos, listCircles } from "../services/circles";
-import { utcDateKey } from "../services/common";
+import {
+  getCircleBySlug,
+  getCity,
+  getCountry,
+  isCircleHost,
+  listCirclePhotos,
+  listCircles,
+  listCities,
+  listCountries,
+  searchCircles,
+  type CitySummary,
+  type CountrySummary,
+} from "../services/circles";
+import { SEARCH_MAX_LENGTH, utcDateKey } from "../services/common";
 import {
   listBookingsForUser,
   listPackages,
@@ -62,6 +74,7 @@ import {
   listEvents,
   listEventsForCircle,
   parseMonth,
+  searchEvents,
   type CalendarDay as CalendarSource,
   type EventSummary,
 } from "../services/events";
@@ -215,8 +228,20 @@ function toGalleryItems(
   return photos.map((p) => ({ caption: p.caption, seed: p.seed, objectKey: p.objectKey }));
 }
 
-function toPerson(p: { name: string; headline: string | null; city?: string | null }): PersonEntry {
-  return { name: p.name, headline: p.headline ?? "Member", city: p.city ?? undefined };
+function toPerson(p: {
+  userId?: string;
+  name: string;
+  headline: string | null;
+  city?: string | null;
+}): PersonEntry {
+  // Carry the id through: without it every member and attendee rendered as
+  // plain text and no profile page was reachable from anywhere in the product.
+  return {
+    id: p.userId,
+    name: p.name,
+    headline: p.headline ?? "Member",
+    city: p.city ?? undefined,
+  };
 }
 
 /** A styled 404 — never a stack trace, never the JSON handler (§8). */
@@ -345,17 +370,96 @@ pages.get("/", async (c) => {
 
 /* ------------------------------------------------------------- circles */
 
-/** Micro-caps hairline row, active marked by a 1px brass underline. Never pills (§5). */
-function categoryFilters(active: string | undefined): FilterOption[] {
-  const options: FilterOption[] = [{ label: "All", href: "/circles", current: active === undefined }];
+/**
+ * Micro-caps hairline row, active marked by a 1px brass underline. Never pills
+ * (§5). `place` is carried through every link, so choosing a category keeps
+ * the country and city the reader already picked.
+ */
+function categoryFilters(active: string | undefined, place: PlaceQuery = {}): FilterOption[] {
+  const options: FilterOption[] = [
+    { label: "All", href: withFilters("/circles", place, { category: undefined }), current: active === undefined },
+  ];
   for (const category of CIRCLE_CATEGORIES) {
     options.push({
       label: category,
-      href: `/circles?category=${category}`,
+      href: withFilters("/circles", place, { category }),
       current: active === category,
     });
   }
   return options;
+}
+
+/**
+ * The country and city rows a directory page carries above its results.
+ *
+ * Both are built from the data (see `listCities`/`listCountries`) — there is no
+ * list of places in this file, so a community added in a new country puts that
+ * country in the row on the next request. Picking a country narrows the city
+ * row to that country's cities, which is the drill-down the product is built
+ * around.
+ *
+ * `count` is what the reader is looking at: communities on `/circles`,
+ * gatherings coming up on `/events`. A place with none of the thing this page
+ * lists is left out rather than shown as a zero.
+ */
+function placeRows(
+  base: string,
+  place: PlaceQuery,
+  countries: CountrySummary[],
+  cities: CitySummary[],
+  counting: "circles" | "events",
+): { countries: PlaceOption[]; cities: PlaceOption[] } {
+  const countOf = (row: { circleCount: number; eventCount: number }): number =>
+    counting === "circles" ? row.circleCount : row.eventCount;
+
+  const countryOptions: PlaceOption[] = [
+    {
+      label: "All",
+      href: withFilters(base, place, { country: undefined, city: undefined }),
+      count: countries.reduce((n, row) => n + countOf(row), 0),
+      current: place.country === undefined,
+    },
+  ];
+  for (const row of countries) {
+    if (countOf(row) === 0) continue;
+    countryOptions.push({
+      label: row.country,
+      // A city belongs to one country, so switching country clears the city.
+      href: withFilters(base, place, { country: row.country, city: undefined }),
+      count: countOf(row),
+      current: place.country?.toLowerCase() === row.country.toLowerCase(),
+    });
+  }
+
+  const cityOptions: PlaceOption[] = [
+    {
+      label: "All",
+      href: withFilters(base, place, { city: undefined }),
+      count: cities.reduce((n, row) => n + countOf(row), 0),
+      current: place.city === undefined,
+    },
+  ];
+  for (const row of cities) {
+    if (countOf(row) === 0) continue;
+    cityOptions.push({
+      label: row.city,
+      href: withFilters(base, place, { city: row.city }),
+      count: countOf(row),
+      current: place.city?.toLowerCase() === row.city.toLowerCase(),
+    });
+  }
+
+  return { countries: countryOptions, cities: cityOptions };
+}
+
+/** One labelled hairline row. Three of them stack without becoming a wall. */
+function FilterGroup(props: { legend: string; children?: Child }) {
+  return (
+    <div class="filter-group">
+      <p class="micro filter-legend">{props.legend}</p>
+      {props.children}
+    </div>
+  );
 }
 
 pages.get("/circles", async (c) => {
@@ -390,13 +494,23 @@ pages.get("/circles", async (c) => {
   }
 
   const category = raw === undefined || raw === "" ? undefined : (raw as CircleCategory);
-  const circles = await listCircles(c.env, { category });
+  // Places come from the data, so an unknown one cannot be told from a typo.
+  // It is an empty result with a way out, never a 404 and never a 400.
+  const place = readPlace(c, { category });
+  const now = new Date();
+  const [circles, allCountries, cities] = await Promise.all([
+    listCircles(c.env, { category, city: place.city, country: place.country }),
+    listCountries(c.env, { now }),
+    listCities(c.env, { country: place.country, now }),
+  ]);
+  const rows = placeRows("/circles", place, allCountries, cities, "circles");
+  const where = place.city ?? place.country;
 
   pageHeaders(c);
   return c.html(
     <Layout bodyClass="page-index"
-      title={pageTitle("Circles", flash)}
-      description="Every circle, by category. One host, one city, a fixed number of members."
+      title={pageTitle(where === undefined ? "Circles" : `Circles in ${where}`, flash)}
+      description="Every circle, by country, city and category. One host, one city, a fixed number of members."
       user={layoutUser(me)}
       active="circles"
     >
@@ -407,23 +521,42 @@ pages.get("/circles", async (c) => {
         title="Circles"
         lede="Each circle is run by one person, meets in one city, and holds a fixed number of members."
       />
+      <Section index={2} label="Search" title="Find one">
+        <SearchField hint="A country, a city, a community or a gathering." />
+      </Section>
       <Section
-        index={2}
-        label="Category"
-        title={
-          category === undefined
-            ? "Every circle"
-            : `${category.charAt(0).toUpperCase()}${category.slice(1)} circles`
-        }
+        index={3}
+        label={place.country === undefined && place.city === undefined ? "Category" : "Where"}
+        title={directoryHeading(category, place, "circle", "circles")}
       >
-        <div style="margin-block-end:var(--s6)">
-          <FilterRow label="Category" options={categoryFilters(category)} />
+        <div class="filter-stack">
+          <FilterGroup legend="Country">
+            <PlaceRow label="Country" noun="circle" options={rows.countries} />
+          </FilterGroup>
+          <FilterGroup legend="City">
+            <PlaceRow label="City" noun="circle" options={rows.cities} />
+          </FilterGroup>
+          <FilterGroup legend="Category">
+            <FilterRow label="Category" options={categoryFilters(category, place)} />
+          </FilterGroup>
         </div>
         {circles.length === 0 ? (
           <EmptyState
-            title="No circles in this category yet."
-            note="The other categories all have circles taking members."
-            action={{ href: "/circles", label: "Every circle" }}
+            title={
+              where === undefined
+                ? "No circles in this category yet."
+                : `No circles in ${where} yet.`
+            }
+            note={
+              where === undefined
+                ? "The other categories all have circles taking members."
+                : "The rows above list every country and city that has one. The country index has the whole map."
+            }
+            action={
+              where === undefined
+                ? { href: "/circles", label: "Every circle" }
+                : { href: "/countries", label: "The country index" }
+            }
           />
         ) : (
           <CardGrid>
@@ -763,13 +896,24 @@ function toLedgerGroups(events: EventSummary[]): LedgerGroup[] {
 pages.get("/events", async (c) => {
   const me = await currentUser(c);
   const flash = await readFlash(c, me);
-  const events = await listEvents(c.env);
-  const rows = upcoming(events, new Date());
+  const place = readPlace(c);
+  const now = new Date();
+
+  // `from` is applied in SQL rather than after the fact, so the LIMIT is spent
+  // on dates that are still to come and the counts in the rows above equal the
+  // rows printed below them.
+  const [rows, allCountries, cities] = await Promise.all([
+    listEvents(c.env, { city: place.city, country: place.country, from: now }),
+    listCountries(c.env, { now }),
+    listCities(c.env, { country: place.country, now }),
+  ]);
+  const filters = placeRows("/events", place, allCountries, cities, "events");
+  const where = place.city ?? place.country;
 
   pageHeaders(c);
   return c.html(
     <Layout bodyClass="page-index"
-      title={pageTitle("Gatherings", flash)}
+      title={pageTitle(where === undefined ? "Gatherings" : `Gatherings in ${where}`, flash)}
       description="Every published gathering, soonest first, with the places left on each."
       user={layoutUser(me)}
       active="gatherings"
@@ -781,17 +925,40 @@ pages.get("/events", async (c) => {
         title="Gatherings"
         lede="Every published gathering, soonest first. The number on the right is how many places are left."
       />
+      <Section index={2} label="Search" title="Find one">
+        <SearchField hint="A country, a city, a community or a gathering." />
+      </Section>
       <Section
-        index={2}
-        label="Ledger"
-        title="The dates"
+        index={3}
+        label="Where"
+        title={directoryHeading(undefined, place, "date", "dates")}
         action={{ href: "/calendar", label: "By month" }}
       >
+        <div class="filter-stack">
+          <FilterGroup legend="Country">
+            <PlaceRow label="Country" noun="gathering" options={filters.countries} />
+          </FilterGroup>
+          <FilterGroup legend="City">
+            <PlaceRow label="City" noun="gathering" options={filters.cities} />
+          </FilterGroup>
+        </div>
         {rows.length === 0 ? (
           <EmptyState
-            title="No gatherings scheduled."
-            note="Hosts post a season at a time. The circles list who is running what."
-            action={{ href: "/circles", label: "The circles" }}
+            title={
+              where === undefined
+                ? "No gatherings scheduled."
+                : `No gatherings in ${where} yet.`
+            }
+            note={
+              where === undefined
+                ? "Hosts post a season at a time. The circles list who is running what."
+                : "The rows above list every country and city with a date coming up. The country index has the whole map."
+            }
+            action={
+              where === undefined
+                ? { href: "/circles", label: "The circles" }
+                : { href: "/countries", label: "The country index" }
+            }
           />
         ) : (
           <Ledger groups={toLedgerGroups(rows)} />
@@ -1217,6 +1384,702 @@ pages.get("/calendar", async (c) => {
           />
         </Container>
       </section>
+    </Layout>,
+  );
+});
+
+/* ------------------------------------------------------------- discovery */
+
+/**
+ * Search and geography — the two ways in that are not a link someone already
+ * had. Both are read from the data: the countries and cities below come from
+ * the communities and gatherings that exist, so a community added in a new
+ * country puts that country on `/countries` with no code change.
+ *
+ * Country is the primary axis and city the drill-down, which is why the rows
+ * appear in that order and why `/countries/:country` links down to
+ * `/cities/:city` rather than the other way round.
+ */
+
+/** How many rows one search group shows before it says it has stopped. */
+const SEARCH_GROUP_LIMIT = 12;
+
+/** The three filters a directory page carries, as they came off the URL. */
+type PlaceQuery = { category?: string; country?: string; city?: string };
+
+/**
+ * Rebuild a directory URL with one filter changed or cleared, so picking a
+ * country keeps the category you were already reading under. `undefined`
+ * drops the parameter, which is what "All" does.
+ */
+/**
+ * `?city=` and `?country=` off the URL.
+ *
+ * Neither can be checked against a list the way `?category=` is — they come
+ * from the data, and hardcoding the world here is exactly what the product
+ * must not do. So they are only bounded and trimmed (§8: validate what crossed
+ * the network), and a name nothing answers to becomes an empty result with a
+ * way out rather than an error.
+ */
+function readPlace(c: PageContext, base: PlaceQuery = {}): PlaceQuery {
+  const clean = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim();
+    if (trimmed === undefined || trimmed === "") return undefined;
+    return trimmed.slice(0, SEARCH_MAX_LENGTH);
+  };
+  return { ...base, country: clean(c.req.query("country")), city: clean(c.req.query("city")) };
+}
+
+/** `Every circle` · `Sailing circles` · `Sailing circles in Monaco`. */
+function directoryHeading(
+  category: string | undefined,
+  place: PlaceQuery,
+  one: string,
+  many: string,
+): string {
+  const kind =
+    category === undefined
+      ? `Every ${one}`
+      : `${category.charAt(0).toUpperCase()}${category.slice(1)} ${many}`;
+  const where = place.city ?? place.country;
+  return where === undefined ? kind : `${kind} in ${where}`;
+}
+
+function withFilters(base: string, current: PlaceQuery, change: PlaceQuery): string {
+  const merged: PlaceQuery = { ...current, ...change };
+  const params = new URLSearchParams();
+  if (merged.category) params.set("category", merged.category);
+  if (merged.country) params.set("country", merged.country);
+  if (merged.city) params.set("city", merged.city);
+  const query = params.toString();
+  return query === "" ? base : `${base}?${query}`;
+}
+
+type PlaceOption = { label: string; href: string; count: number; current: boolean };
+
+/**
+ * The same hairline micro-caps row as the category filter, with the number of
+ * things in each place beside its name. A 1px accent underline marks the live
+ * one. Never pills (§5).
+ *
+ * `noun` is what the count counts, and it only reaches a screen reader: the
+ * row is scanned visually, where the column of numerals reads as a tally.
+ */
+function PlaceRow(props: { label: string; noun: string; options: PlaceOption[] }) {
+  return (
+    <nav class="filters" aria-label={props.label}>
+      {props.options.map((o) => (
+        <a
+          class="filter"
+          href={o.href}
+          aria-current={o.current ? "page" : undefined}
+          aria-label={`${o.label}, ${plural(o.count, props.noun, `${props.noun}s`)}`}
+        >
+          {o.label}
+          <span class="filter-count num" aria-hidden="true">
+            {o.count}
+          </span>
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+/**
+ * One field, in the page body. The header belongs to navigation, so search
+ * lives where the reader is already looking at results (§5).
+ */
+function SearchField(props: { value?: string; hint?: string }) {
+  return (
+    <form class="searchbar" method="get" action="/search" role="search">
+      <label class="vh" for="q">
+        Search communities, gatherings, cities and countries
+      </label>
+      <input
+        id="q"
+        class="searchbar-input"
+        type="search"
+        name="q"
+        value={props.value ?? ""}
+        placeholder="Bangkok, sailing, a name"
+        maxlength={SEARCH_MAX_LENGTH}
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck={false}
+        inputmode="search"
+        enterkeyhint="search"
+      />
+      <Button type="submit" variant="ghost">
+        Search
+      </Button>
+      {props.hint !== undefined ? <p class="searchbar-hint meta">{props.hint}</p> : null}
+    </form>
+  );
+}
+
+/**
+ * A group that matched nothing, on a page where another group did.
+ *
+ * A full `EmptyState` here — heading, note and a button — out-weighed the two
+ * results beside it and turned a four-result page into four screens of
+ * scrolling. The group still carries its count in the section heading, which
+ * is what the reader needs; this is the one line that says so in place.
+ */
+function GroupEmpty(props: { note: string }) {
+  return <p class="meta group-empty">{props.note}</p>;
+}
+
+/** Fact, then two ways on. No apology and no exclamation mark (§6). */
+function NoResults(props: { title: string; note: string }) {
+  return (
+    <div class="empty">
+      <h3 class="h-card">{props.title}</h3>
+      <p class="empty-note">{props.note}</p>
+      <div class="empty-action row">
+        <Button href="/circles" variant="quiet">
+          Browse all communities
+        </Button>
+        <Button href="/events" variant="quiet">
+          See what's on
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** `Lisbon · Portugal · 2 communities · 4 gatherings coming up`. */
+function placeTally(circleCount: number, eventCount: number): string {
+  return `${plural(circleCount, "community", "communities")} · ${plural(
+    eventCount,
+    "gathering",
+    "gatherings",
+  )} coming up`;
+}
+
+/* -------------------------------------------------------------- countries */
+
+pages.get("/countries", async (c) => {
+  const me = await currentUser(c);
+  const flash = await readFlash(c, me);
+  const now = new Date();
+  const countries = await listCountries(c.env, { now });
+  const cities = await listCities(c.env, { now });
+
+  const cityLine = (country: string): CitySummary[] =>
+    cities.filter((city) => city.country === country);
+
+  pageHeaders(c);
+  return c.html(
+    <Layout
+      bodyClass="page-index"
+      title={pageTitle("Countries", flash)}
+      description="Every country 2CC runs in, with the communities and the gatherings coming up in each."
+      user={layoutUser(me)}
+      active="countries"
+    >
+      <FlashBanner flash={flash} />
+      <Hero
+        index="01"
+        label="Worldwide"
+        title="Countries"
+        lede="One world. Every country a community meets in, with the cities underneath it and the dates coming up in each."
+      />
+      <Section index={2} label="Search" title="Looking for somewhere">
+        <SearchField hint="A country, a city, a community or a gathering." />
+      </Section>
+      <Section
+        index={3}
+        label="Index"
+        title={plural(countries.length, "country", "countries")}
+        action={{ href: "/events", label: "Every gathering" }}
+      >
+        {countries.length === 0 ? (
+          <EmptyState
+            title="No countries yet."
+            note="A country appears here as soon as a community is based in it."
+            action={{ href: "/circles", label: "Browse all communities" }}
+          />
+        ) : (
+          <div class="geo-index">
+            {countries.map((row) => (
+              <article class="geo-row linkbox">
+                <div class="geo-main">
+                  <h3 class="h-card linkbox-title">
+                    <a href={`/countries/${encodeURIComponent(row.country)}`}>{row.country}</a>
+                  </h3>
+                  <p class="geo-cities">
+                    {cityLine(row.country).map((city, i) => (
+                      <>
+                        {i > 0 ? <span class="dot">·</span> : null}
+                        <a class="secondary" href={`/cities/${encodeURIComponent(city.city)}`}>
+                          {city.city}
+                        </a>
+                      </>
+                    ))}
+                  </p>
+                </div>
+                <dl class="geo-counts">
+                  <div>
+                    <dt class="micro">Communities</dt>
+                    <dd class="num">{row.circleCount}</dd>
+                  </div>
+                  <div>
+                    <dt class="micro">Cities</dt>
+                    <dd class="num">{row.cityCount}</dd>
+                  </div>
+                  <div>
+                    <dt class="micro">Coming up</dt>
+                    <dd class="num">{row.eventCount}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
+          </div>
+        )}
+      </Section>
+    </Layout>,
+  );
+});
+
+pages.get("/countries/:country", async (c) => {
+  const me = await currentUser(c);
+  const raw = c.req.param("country");
+  const now = new Date();
+  const found = await getCountry(c.env, raw, { now });
+
+  // Nothing here at all is a 404, and a styled one (§8). A country that has a
+  // community but no dates is not nothing — it renders with an empty ledger.
+  if (!found) {
+    return notFoundPage(
+      c,
+      me,
+      "No such country",
+      `Nothing is running in "${raw}" yet. The country index lists every one that is.`,
+    );
+  }
+
+  const flash = await readFlash(c, me);
+  const [cities, circles, events] = await Promise.all([
+    listCities(c.env, { country: found.country, now }),
+    listCircles(c.env, { country: found.country }),
+    listEvents(c.env, { country: found.country, from: now }),
+  ]);
+
+  pageHeaders(c);
+  return c.html(
+    <Layout
+      bodyClass="page-index"
+      title={pageTitle(found.country, flash)}
+      description={`What is on in ${found.country}: ${placeTally(found.circleCount, found.eventCount)}.`}
+      user={layoutUser(me)}
+      active="countries"
+    >
+      <FlashBanner flash={flash} />
+      <Hero
+        index="01"
+        label="Country"
+        title={`What is on in ${found.country}`}
+        lede={`${placeTally(found.circleCount, found.eventCount)}, across ${plural(
+          found.cityCount,
+          "city",
+          "cities",
+        )}.`}
+      />
+
+      <Section index={2} label="Cities" title="Where in the country">
+        <PlaceRow
+          label={`Cities in ${found.country}`}
+          noun="gathering"
+          options={cities.map((city) => ({
+            label: city.city,
+            href: `/cities/${encodeURIComponent(city.city)}`,
+            count: city.eventCount,
+            current: false,
+          }))}
+        />
+        <p class="meta" style="margin-block-start:var(--s4)">
+          The number beside a city is how many gatherings it has coming up.
+        </p>
+      </Section>
+
+      <Section
+        index={3}
+        label="Communities"
+        title={plural(circles.length, "community", "communities")}
+        action={{
+          href: `/circles?country=${encodeURIComponent(found.country)}`,
+          label: "In the directory",
+        }}
+      >
+        {circles.length === 0 ? (
+          <EmptyState
+            title={`No communities based in ${found.country} yet.`}
+            note="The gatherings below are run by communities based elsewhere."
+            action={{ href: "/circles", label: "Browse all communities" }}
+          />
+        ) : (
+          <CardGrid>
+            {circles.map((circle) => (
+              <CircleCard
+                slug={circle.slug}
+                coverKey={circle.coverKey}
+                name={circle.name}
+                tagline={circle.tagline}
+                city={circle.city}
+                category={circle.category}
+                memberCount={circle.memberCount}
+                isPrivate={circle.isPrivate}
+              />
+            ))}
+          </CardGrid>
+        )}
+      </Section>
+
+      <Section
+        index={4}
+        label="Coming up"
+        title="The dates"
+        action={{
+          href: `/events?country=${encodeURIComponent(found.country)}`,
+          label: "In the ledger",
+        }}
+      >
+        {events.length === 0 ? (
+          <EmptyState
+            title={`No dates in ${found.country} yet.`}
+            note="Hosts post a season at a time. The calendar keeps the months either side."
+            action={{ href: "/calendar", label: "Open the calendar" }}
+          />
+        ) : (
+          <Ledger groups={toLedgerGroups(events)} />
+        )}
+      </Section>
+    </Layout>,
+  );
+});
+
+/* ----------------------------------------------------------------- cities */
+
+pages.get("/cities/:city", async (c) => {
+  const me = await currentUser(c);
+  const raw = c.req.param("city");
+  const now = new Date();
+  const found = await getCity(c.env, raw, { now });
+
+  if (!found) {
+    return notFoundPage(
+      c,
+      me,
+      "No such city",
+      `Nothing is running in "${raw}" yet. Every country 2CC covers is on the country index.`,
+    );
+  }
+
+  const flash = await readFlash(c, me);
+  const [circles, events] = await Promise.all([
+    listCircles(c.env, { city: found.city }),
+    listEvents(c.env, { city: found.city, from: now }),
+  ]);
+
+  pageHeaders(c);
+  return c.html(
+    <Layout
+      bodyClass="page-index"
+      title={pageTitle(found.city, flash)}
+      description={`What is on in ${found.city}: ${placeTally(found.circleCount, found.eventCount)}.`}
+      user={layoutUser(me)}
+      active="countries"
+    >
+      <FlashBanner flash={flash} />
+      {/* The country is the level above, and it goes in the hero rather than
+          in a band of its own: rendered as its own section it was one link
+          alone in a full clamp(64px,12vw,144px) band, which reads as an empty
+          screen between the title and the first result. */}
+      <Hero
+        index="01"
+        label="City"
+        title={`What is on in ${found.city}`}
+        lede={`${placeTally(found.circleCount, found.eventCount)}. Every gathering has a date, an address and a number of places.`}
+      >
+        <a class="geo-up" href={`/countries/${encodeURIComponent(found.country)}`}>
+          {`Everything in ${found.country}`}
+        </a>
+      </Hero>
+
+      <Section
+        index={2}
+        label="Coming up"
+        title={plural(events.length, "gathering", "gatherings")}
+        action={{ href: "/calendar", label: "By month" }}
+      >
+        {events.length === 0 ? (
+          <EmptyState
+            title={`No dates in ${found.city} yet.`}
+            note={`The communities based here post their calendars a season ahead. ${found.country} has other cities running now.`}
+            action={{
+              href: `/countries/${encodeURIComponent(found.country)}`,
+              label: `Everything in ${found.country}`,
+            }}
+          />
+        ) : (
+          <Ledger groups={toLedgerGroups(events)} />
+        )}
+      </Section>
+
+      <Section
+        index={3}
+        label="Communities"
+        title={
+          circles.length === 1
+            ? "The community based here"
+            : `${circles.length} communities based here`
+        }
+        action={{
+          href: `/circles?city=${encodeURIComponent(found.city)}`,
+          label: "In the directory",
+        }}
+      >
+        {circles.length === 0 ? (
+          <EmptyState
+            title={`No community is based in ${found.city}.`}
+            note="The dates above are run by communities based in other cities."
+            action={{
+              href: `/countries/${encodeURIComponent(found.country)}`,
+              label: `Communities in ${found.country}`,
+            }}
+          />
+        ) : (
+          <CardGrid>
+            {circles.map((circle) => (
+              <CircleCard
+                slug={circle.slug}
+                coverKey={circle.coverKey}
+                name={circle.name}
+                tagline={circle.tagline}
+                city={circle.city}
+                category={circle.category}
+                memberCount={circle.memberCount}
+                isPrivate={circle.isPrivate}
+              />
+            ))}
+          </CardGrid>
+        )}
+      </Section>
+    </Layout>,
+  );
+});
+
+/* ----------------------------------------------------------------- search */
+
+pages.get("/search", async (c) => {
+  const me = await currentUser(c);
+  const flash = await readFlash(c, me);
+  const raw = c.req.query("q") ?? "";
+
+  // Past the cap it is a payload rather than a search (§8: validate what
+  // crossed the network, and answer 400 rather than throwing a 500).
+  if (raw.length > SEARCH_MAX_LENGTH) {
+    pageHeaders(c);
+    return c.html(
+      <Layout bodyClass="page-index" title="Search" user={layoutUser(me)} active="search">
+        <Container>
+          <div style="padding-block-start:var(--s5)">
+            <Alert tone="warn">
+              {`That search is ${raw.length} characters. ${SEARCH_MAX_LENGTH} is the most this field takes.`}
+            </Alert>
+          </div>
+        </Container>
+        <Hero index="01" label="Search" title="Search" lede="One field, across every country." />
+        <Section index={2} label="Again" title="Try a shorter one">
+          <SearchField hint="A country, a city, a community or a gathering." />
+        </Section>
+      </Layout>,
+      400,
+    );
+  }
+
+  const term = raw.trim();
+
+  // An empty field is a prompt, not an error — someone has just arrived.
+  if (term === "") {
+    const now = new Date();
+    const countries = await listCountries(c.env, { now });
+    pageHeaders(c);
+    return c.html(
+      <Layout
+        bodyClass="page-index"
+        title={pageTitle("Search", flash)}
+        description="Search every community, gathering, city and country on 2CC."
+        user={layoutUser(me)}
+        active="search"
+      >
+        <FlashBanner flash={flash} />
+        <Hero
+          index="01"
+          label="Search"
+          title="Search"
+          lede="One field. It reads community names and descriptions, gathering titles and summaries, and the names of cities and countries."
+        />
+        <Section index={2} label="Field" title="What are you looking for">
+          <SearchField hint="A country, a city, a community or a gathering." />
+        </Section>
+        <Section
+          index={3}
+          label="Countries"
+          title="Or start from a country"
+          action={{ href: "/countries", label: "The country index" }}
+        >
+          <PlaceRow
+            label="Countries"
+            noun="gathering"
+            options={countries.map((row) => ({
+              label: row.country,
+              href: `/countries/${encodeURIComponent(row.country)}`,
+              count: row.eventCount,
+              current: false,
+            }))}
+          />
+        </Section>
+      </Layout>,
+    );
+  }
+
+  const now = new Date();
+  const [communities, gatherings, countries, cities] = await Promise.all([
+    searchCircles(c.env, term, { limit: SEARCH_GROUP_LIMIT }),
+    searchEvents(c.env, term, { from: now, limit: SEARCH_GROUP_LIMIT }),
+    listCountries(c.env, { match: term, now, limit: SEARCH_GROUP_LIMIT }),
+    listCities(c.env, { match: term, now, limit: SEARCH_GROUP_LIMIT }),
+  ]);
+  const total = communities.length + gatherings.length + countries.length + cities.length;
+
+  /** Said only when a group is full, because then there may well be more. */
+  const capped = (n: number): Child =>
+    n < SEARCH_GROUP_LIMIT ? null : (
+      <p class="meta" style="margin-block-start:var(--s4)">
+        {`The first ${SEARCH_GROUP_LIMIT} are shown. Narrow the search to see the rest.`}
+      </p>
+    );
+
+  pageHeaders(c);
+  return c.html(
+    <Layout
+      bodyClass="page-index"
+      title={pageTitle(`Search: ${term}`, flash)}
+      description={`What matches "${term}" across every community, gathering, city and country.`}
+      user={layoutUser(me)}
+      active="search"
+    >
+      <FlashBanner flash={flash} />
+      <Hero
+        index="01"
+        label="Search"
+        title={term}
+        lede={
+          total === 0
+            ? "Nothing matches that yet."
+            : `${plural(total, "result", "results")}, in four groups: communities, gatherings, countries and cities.`
+        }
+      />
+
+      <Section index={2} label="Search" title="Search again">
+        <SearchField value={term} hint="A country, a city, a community or a gathering." />
+      </Section>
+
+      {total === 0 ? (
+        <Section index={3} label="Nothing" title="No matches">
+          <NoResults
+            title={`Nothing matches "${term}".`}
+            note="The search reads community names, taglines and descriptions, gathering titles and summaries, and the names of cities and countries."
+          />
+        </Section>
+      ) : (
+        <>
+          <Section
+            index={3}
+            label="Communities"
+            title={plural(communities.length, "community", "communities")}
+          >
+            {communities.length === 0 ? (
+              <GroupEmpty note={`No community matches "${term}".`} />
+            ) : (
+              <>
+                <CardGrid>
+                  {communities.map((circle) => (
+                    <CircleCard
+                      slug={circle.slug}
+                      coverKey={circle.coverKey}
+                      name={circle.name}
+                      tagline={circle.tagline}
+                      city={circle.city}
+                      category={circle.category}
+                      memberCount={circle.memberCount}
+                      isPrivate={circle.isPrivate}
+                    />
+                  ))}
+                </CardGrid>
+                {capped(communities.length)}
+              </>
+            )}
+          </Section>
+
+          <Section
+            index={4}
+            label="Gatherings"
+            title={plural(gatherings.length, "gathering", "gatherings")}
+          >
+            {gatherings.length === 0 ? (
+              <GroupEmpty
+                note={`No gathering matches "${term}". Only dates that have not started yet are searched.`}
+              />
+            ) : (
+              <>
+                <Ledger groups={toLedgerGroups(gatherings)} />
+                {capped(gatherings.length)}
+              </>
+            )}
+          </Section>
+
+          <Section
+            index={5}
+            label="Countries"
+            title={plural(countries.length, "country", "countries")}
+            action={{ href: "/countries", label: "The country index" }}
+          >
+            {countries.length === 0 ? (
+              <GroupEmpty note={`No country matches "${term}".`} />
+            ) : (
+              <PlaceRow
+                label="Countries that match"
+                noun="gathering"
+                options={countries.map((row) => ({
+                  label: row.country,
+                  href: `/countries/${encodeURIComponent(row.country)}`,
+                  count: row.eventCount,
+                  current: false,
+                }))}
+              />
+            )}
+          </Section>
+
+          <Section index={6} label="Cities" title={plural(cities.length, "city", "cities")}>
+            {cities.length === 0 ? (
+              <GroupEmpty note={`No city matches "${term}".`} />
+            ) : (
+              <PlaceRow
+                label="Cities that match"
+                noun="gathering"
+                options={cities.map((row) => ({
+                  label: row.city,
+                  href: `/cities/${encodeURIComponent(row.city)}`,
+                  count: row.eventCount,
+                  current: false,
+                }))}
+              />
+            )}
+          </Section>
+        </>
+      )}
     </Layout>,
   );
 });

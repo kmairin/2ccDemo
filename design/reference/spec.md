@@ -1,3 +1,9 @@
+> **SUPERSEDED.** This described 2CC as an invitation-only club for a small,
+> selective membership. The owner's real brief is the opposite: a global,
+> open community and media platform. See **brief-v2.md**, which wins over
+> everything in this file. Kept only because the screen list and the
+> vocabulary section are still accurate.
+
 # 2CC — the members' circle
 
 A private events platform for people who travel. Communities ("circles") run

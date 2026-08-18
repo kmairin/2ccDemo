@@ -83,7 +83,7 @@ export function Layout(props: LayoutProps) {
           <title>{`${title} · 2CC`}</title>
           <meta
             name="description"
-            content={description ?? "A private circle of gatherings, by invitation."}
+            content={description ?? "Communities, activities and experiences around the world. One World. Endless Connections."}
           />
           {/* An inline monogram mark. Without an icon the browser requests
               /favicon.ico and logs a 404 on every page — one console error is
@@ -201,7 +201,7 @@ export function Layout(props: LayoutProps) {
           <footer class="site-footer">
             <div class="shell footer-inner">
               <span class="wordmark wordmark--quiet footer-spacer">2CC</span>
-              <span class="meta">By invitation</span>
+              <span class="meta">One World. Endless Connections.</span>
               <a class="footer-link" href="/calendar">
                 Calendar
               </a>

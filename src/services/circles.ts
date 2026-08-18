@@ -4,10 +4,18 @@
  * Every function takes `env` and returns typed rows. No Hono, no Response, no
  * formatting — routes shape the answer, these just fetch it.
  */
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, ilike, or, sql, type SQL } from "drizzle-orm";
 import { getDb, type DatabaseEnv } from "../db";
-import { circles, photos, users, type CircleCategory } from "../schema";
-import { approvedMemberCount, boundLimit, publishedEventCount } from "./common";
+import { circles, events, photos, users, type CircleCategory } from "../schema";
+import {
+  approvedMemberCount,
+  boundLimit,
+  byName,
+  likeContains,
+  likeExact,
+  placeKey,
+  publishedEventCount,
+} from "./common";
 
 /** A circle as the directory shows it. Matches the contract's list item. */
 export interface CircleSummary {
@@ -73,21 +81,267 @@ const summaryColumns = {
 
 /**
  * The directory, oldest circle first so the order is stable between renders.
+ *
  * `category` is already validated by the caller — it is a column filter, not a
- * search.
+ * search. `city` and `country` cannot be, because they come from the data
+ * rather than from a fixed list (a new country appears the moment a community
+ * is added there), so they are matched case-insensitively and an unknown one
+ * is an empty list rather than an error. The three compose.
  */
 export async function listCircles(
   env: DatabaseEnv,
-  options: { category?: CircleCategory; limit?: number } = {},
+  options: {
+    category?: CircleCategory;
+    city?: string;
+    country?: string;
+    limit?: number;
+  } = {},
 ): Promise<CircleSummary[]> {
   const db = getDb(env);
   const rows = await db
     .select(summaryColumns)
     .from(circles)
-    .where(options.category ? eq(circles.category, options.category) : undefined)
+    .where(and(...circleFilters(options)))
     .orderBy(asc(circles.createdAt))
     .limit(boundLimit(options.limit));
   return rows.map(toSummary);
+}
+
+/**
+ * The `where` behind both the directory and the counts below, so a filtered
+ * list and the number printed above it can never drift apart. `ilike` with a
+ * wildcard-free pattern is case-insensitive equality, and Drizzle parameterises
+ * the pattern (AGENTS.md §5) — nothing here is concatenated into SQL.
+ */
+function circleFilters(options: {
+  category?: CircleCategory;
+  city?: string;
+  country?: string;
+}): SQL[] {
+  const filters: SQL[] = [];
+  if (options.category) filters.push(eq(circles.category, options.category));
+  if (options.city) filters.push(ilike(circles.city, likeExact(options.city)));
+  if (options.country) filters.push(ilike(circles.country, likeExact(options.country)));
+  return filters;
+}
+
+/**
+ * Free-text search over the communities: name, tagline, description, city and
+ * country. Case-insensitive substring, which is all this product needs and all
+ * a reader expects from one field.
+ *
+ * Every term goes through `ilike` as a bound parameter. There is no string
+ * concatenation anywhere in this query, which is the rule that keeps injection
+ * out (AGENTS.md §5).
+ */
+export async function searchCircles(
+  env: DatabaseEnv,
+  term: string,
+  options: { limit?: number } = {},
+): Promise<CircleSummary[]> {
+  const trimmed = term.trim();
+  if (trimmed === "") return [];
+  const pattern = likeContains(trimmed);
+  const db = getDb(env);
+  const rows = await db
+    .select(summaryColumns)
+    .from(circles)
+    .where(
+      or(
+        ilike(circles.name, pattern),
+        ilike(circles.tagline, pattern),
+        ilike(circles.description, pattern),
+        ilike(circles.city, pattern),
+        ilike(circles.country, pattern),
+      ),
+    )
+    .orderBy(asc(circles.createdAt))
+    .limit(boundLimit(options.limit));
+  return rows.map(toSummary);
+}
+
+/* ------------------------------------------------------------- geography */
+
+/**
+ * Geography is read from the data and never from a list in the code: adding a
+ * community in a new country is the whole of what it takes for that country to
+ * appear here, on `/countries`, in the filter rows and in the search.
+ *
+ * Country is the primary axis and city the drill-down, so both counts hang off
+ * the same two queries: what is based here, and what is on here next.
+ */
+
+/** One city, with what is in it. `eventCount` is upcoming and published only. */
+export interface CitySummary {
+  city: string;
+  country: string;
+  circleCount: number;
+  eventCount: number;
+}
+
+/** One country, with its cities and what is in them. */
+export interface CountrySummary {
+  country: string;
+  cityCount: number;
+  circleCount: number;
+  eventCount: number;
+}
+
+/** `count(*)` on a grouped select, as a number rather than a driver's bigint. */
+const groupCount = count().mapWith(Number);
+
+/**
+ * Every city that has a community based in it or a gathering coming up in it.
+ *
+ * `match` narrows to cities whose name contains it — that is how the search
+ * page finds "Bang" — and `country` narrows to one country's cities, which is
+ * the drill-down `/countries/:country` draws. Both are optional and compose.
+ */
+export async function listCities(
+  env: DatabaseEnv,
+  options: { country?: string; match?: string; now?: Date; limit?: number } = {},
+): Promise<CitySummary[]> {
+  const db = getDb(env);
+  const from = options.now ?? new Date();
+  const cap = boundLimit(options.limit);
+
+  const circleWhere: SQL[] = [];
+  const eventWhere: SQL[] = [eq(events.status, "published"), gte(events.startsAt, from)];
+  if (options.country) {
+    circleWhere.push(ilike(circles.country, likeExact(options.country)));
+    eventWhere.push(ilike(circles.country, likeExact(options.country)));
+  }
+  if (options.match) {
+    circleWhere.push(ilike(circles.city, likeContains(options.match)));
+    eventWhere.push(ilike(events.city, likeContains(options.match)));
+  }
+
+  const [circleRows, eventRows] = await Promise.all([
+    db
+      .select({ city: circles.city, country: circles.country, n: groupCount })
+      .from(circles)
+      .where(and(...circleWhere))
+      .groupBy(circles.city, circles.country)
+      .orderBy(asc(circles.country), asc(circles.city))
+      .limit(cap),
+    // A gathering is in the city its own column names; its country comes from
+    // the circle that runs it, because `events` has none of its own.
+    db
+      .select({ city: events.city, country: circles.country, n: groupCount })
+      .from(events)
+      .innerJoin(circles, eq(circles.id, events.circleId))
+      .where(and(...eventWhere))
+      .groupBy(events.city, circles.country)
+      .orderBy(asc(circles.country), asc(events.city))
+      .limit(cap),
+  ]);
+
+  const byCity = new Map<string, CitySummary>();
+  const put = (city: string, country: string): CitySummary => {
+    const key = placeKey(country, city);
+    let row = byCity.get(key);
+    if (row === undefined) {
+      row = { city, country, circleCount: 0, eventCount: 0 };
+      byCity.set(key, row);
+    }
+    return row;
+  };
+  for (const row of circleRows) put(row.city, row.country).circleCount = Number(row.n);
+  for (const row of eventRows) put(row.city, row.country).eventCount = Number(row.n);
+
+  return [...byCity.values()].sort(byName((row) => `${row.country}|${row.city}`));
+}
+
+/**
+ * Every country that has something, with its city, community and upcoming
+ * gathering counts — the index `/countries` draws.
+ *
+ * A country exists here because a community is based in it: a gathering
+ * belongs to a circle, and the circle is what carries the country, so the two
+ * sets cannot disagree.
+ */
+export async function listCountries(
+  env: DatabaseEnv,
+  options: { match?: string; now?: Date; limit?: number } = {},
+): Promise<CountrySummary[]> {
+  const db = getDb(env);
+  const from = options.now ?? new Date();
+  const cap = boundLimit(options.limit);
+  const match = options.match ? ilike(circles.country, likeContains(options.match)) : undefined;
+
+  const [circleRows, eventRows, cityRows] = await Promise.all([
+    db
+      .select({ country: circles.country, n: groupCount })
+      .from(circles)
+      .where(match)
+      .groupBy(circles.country)
+      .orderBy(asc(circles.country))
+      .limit(cap),
+    db
+      .select({ country: circles.country, n: groupCount })
+      .from(events)
+      .innerJoin(circles, eq(circles.id, events.circleId))
+      .where(and(eq(events.status, "published"), gte(events.startsAt, from), match))
+      .groupBy(circles.country)
+      .orderBy(asc(circles.country))
+      .limit(cap),
+    // Cities per country, counted the same way `listCities` builds them, so
+    // the number on the index equals the rows the country page prints.
+    listCities(env, { match: undefined, now: from, limit: cap }),
+  ]);
+
+  const byCountry = new Map<string, CountrySummary>();
+  const put = (country: string): CountrySummary => {
+    const key = country.trim().toLowerCase();
+    let row = byCountry.get(key);
+    if (row === undefined) {
+      row = { country, cityCount: 0, circleCount: 0, eventCount: 0 };
+      byCountry.set(key, row);
+    }
+    return row;
+  };
+  for (const row of circleRows) put(row.country).circleCount = Number(row.n);
+  for (const row of eventRows) put(row.country).eventCount = Number(row.n);
+  for (const city of cityRows) {
+    const key = city.country.trim().toLowerCase();
+    // Only cities of a country that survived `match`; a name filter on the
+    // country must not drag in cities from the ones it excluded.
+    const row = byCountry.get(key);
+    if (row !== undefined) row.cityCount += 1;
+  }
+
+  return [...byCountry.values()].sort(byName((row) => row.country));
+}
+
+/**
+ * The cap the two lookups below read the index at. They resolve one name out
+ * of it, so the bound is on how many distinct places this product can hold and
+ * still answer `/countries/:country` correctly, not on a page of results.
+ */
+const MAX_PLACES = 100;
+
+/** One country by name, case-insensitively, or null when nothing is there. */
+export async function getCountry(
+  env: DatabaseEnv,
+  country: string,
+  options: { now?: Date } = {},
+): Promise<CountrySummary | null> {
+  const wanted = country.trim().toLowerCase();
+  if (wanted === "") return null;
+  const rows = await listCountries(env, { match: country, now: options.now, limit: MAX_PLACES });
+  return rows.find((row) => row.country.trim().toLowerCase() === wanted) ?? null;
+}
+
+/** One city by name, case-insensitively, or null when nothing is there. */
+export async function getCity(
+  env: DatabaseEnv,
+  city: string,
+  options: { now?: Date } = {},
+): Promise<CitySummary | null> {
+  const wanted = city.trim().toLowerCase();
+  if (wanted === "") return null;
+  const rows = await listCities(env, { match: city, now: options.now, limit: MAX_PLACES });
+  return rows.find((row) => row.city.trim().toLowerCase() === wanted) ?? null;
 }
 
 /** One circle by its URL segment, with the member who runs it. */

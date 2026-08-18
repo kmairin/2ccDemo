@@ -97,3 +97,62 @@ export function placesLeft(capacity: number, confirmed: number): number {
 export function utcDateKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
+
+/* ------------------------------------------------------- search and place */
+
+/**
+ * The longest `?q=` the search route accepts. Past this it is not a search,
+ * it is a payload, and the route answers 400 rather than asking Postgres to
+ * scan for a 4KB substring.
+ */
+export const SEARCH_MAX_LENGTH = 100;
+
+/**
+ * Turn a value the reader typed into a LIKE pattern.
+ *
+ * Drizzle parameterises the pattern, so nothing here is about injection —
+ * `ilike(col, value)` never concatenates (AGENTS.md §5). It is about meaning:
+ * inside a pattern `%` and `_` are wildcards, so a search for `100%` would
+ * otherwise match every row, and `/cities/S_o Paulo` would resolve a city
+ * nobody asked for. Postgres reads a backslash as the escape by default, and
+ * the backslash itself has to be escaped first or it eats the one after it.
+ */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/** Case-insensitive equality, written as a wildcard-free pattern. */
+export function likeExact(value: string): string {
+  return escapeLike(value.trim());
+}
+
+/** Case-insensitive substring — the whole of `ilike` matching in this product. */
+export function likeContains(value: string): string {
+  return `%${escapeLike(value.trim())}%`;
+}
+
+/**
+ * One definition of a place, used by the filter rows, the `?city=`/`?country=`
+ * filters, the city and country pages and the search — for the same reason
+ * `placesLeft` has one definition. Both are deliberately literal:
+ *
+ *   - a **circle** is in the city and country its own columns name;
+ *   - a **gathering** is in the city its own column names, and in the country
+ *     of the circle that runs it (`events` has no country of its own).
+ *
+ * So a Monaco circle sailing out of Cap-d'Ail lists that gathering under
+ * Cap-d'Ail, which is where it actually is, and under Monaco the country.
+ * Every count on a page then equals the rows printed under it.
+ */
+export function placeKey(country: string, city: string): string {
+  return `${country.trim().toLowerCase()}|${city.trim().toLowerCase()}`;
+}
+
+/** Countries and cities sort by name, so the index is stable between renders. */
+export function byName<T>(pick: (row: T) => string): (a: T, b: T) => number {
+  return (a, b) => {
+    const left = pick(a);
+    const right = pick(b);
+    return left < right ? -1 : left > right ? 1 : 0;
+  };
+}

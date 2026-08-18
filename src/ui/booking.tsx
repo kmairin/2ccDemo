@@ -6,6 +6,12 @@
  * fixed too — circle kicker, the credit-and-places line, the button, one helper
  * line. The word "credit" never appears without a number beside it, and the
  * button never just says "Book".
+ *
+ * One state has a second path through it. A member with no credits is offered
+ * **one ticket for this gathering** first — the circle's 1-credit pass bought
+ * and spent in a single submit — with the bigger passes underneath as the
+ * cheaper-per-gathering option. Where the circle sells no 1-credit pass, that
+ * row falls back to exactly the pass buttons it always had.
  */
 
 import type { Child } from "hono/jsx";
@@ -96,6 +102,18 @@ export type ActionAreaProps = {
   /** Always 1 today: booking spends one credit. */
   creditCost?: number;
   state: ActionState;
+  /**
+   * The gathering this area belongs to, for `POST /events/:slug/ticket`.
+   * Optional: when it is absent the slug is read back out of the pass links,
+   * which the gathering page builds as `…/checkout?next=/events/<slug>` (see
+   * `eventSlugFrom`). Pass it explicitly and that fallback is never used.
+   */
+  eventSlug?: string;
+  /**
+   * The one-time nonce for the single-ticket form. Defaults to a fresh one per
+   * render, which is what makes a double tap collide instead of buying twice.
+   */
+  ticketNonce?: string;
 };
 
 function PassButtons(props: { heading: string; passes: PassOffer[] }) {
@@ -113,8 +131,65 @@ function PassButtons(props: { heading: string; passes: PassOffer[] }) {
   );
 }
 
+/* ---------- buying one ticket, without choosing a pass ---------- */
+
+/**
+ * Which gathering these pass links were built for.
+ *
+ * The gathering page hands the action area a circle and a state and nothing
+ * that names the gathering — but it builds every pass link with
+ * `?next=/events/<slug>` so a member lands back where they were. That is where
+ * the slug comes from when `eventSlug` is not supplied.
+ *
+ * Anything that is not a single `/events/<slug>` path returns null, and the
+ * caller then simply does not offer a ticket. The circle page's pass table has
+ * no `next` at all, so it can never accidentally be treated as a gathering.
+ */
+function eventSlugFrom(passes: PassOffer[], explicit?: string): string | null {
+  if (explicit !== undefined && explicit !== "") return explicit;
+  for (const pass of passes) {
+    const query = pass.href.indexOf("?");
+    if (query === -1) continue;
+    const next = new URLSearchParams(pass.href.slice(query + 1)).get("next");
+    const match = next === null ? null : /^\/events\/([A-Za-z0-9-]+)$/.exec(next);
+    if (match) return match[1]!;
+  }
+  return null;
+}
+
+/**
+ * "Buy a ticket — €135": the 1-credit pass and the booking in one submit
+ * (`POST /events/:slug/ticket`).
+ *
+ * `crypto.randomUUID()` is exactly what `issuePurchaseNonce()` in `src/auth.ts`
+ * returns; it is generated here rather than imported so this file keeps no
+ * dependency on the auth module. A fresh one per render is the point — the
+ * server spends it into the order reference, so submitting the same rendered
+ * form twice collides on the unique index instead of buying a second ticket.
+ */
+function TicketButton(props: { action: string; price: string; nonce?: string }) {
+  return (
+    <form method="post" action={props.action}>
+      <input type="hidden" name="nonce" value={props.nonce ?? crypto.randomUUID()} />
+      <Button type="submit" variant="primary" block={true}>
+        Buy a ticket — {props.price}
+      </Button>
+    </form>
+  );
+}
+
 export function ActionArea(props: ActionAreaProps) {
-  const { circle, placesLeft, capacity, creditCost = 1, state } = props;
+  const { circle, placesLeft, capacity, creditCost = 1, state, eventSlug, ticketNonce } = props;
+
+  // A member with no credits is offered the single ticket first and the passes
+  // underneath as the cheaper-per-gathering option. Both halves have to be
+  // there: no 1-credit pass, or no gathering to attach it to, and this falls
+  // back to exactly the pass buttons that were here before.
+  const noCredits = state.kind === "no-credits" ? state.passes : [];
+  const single = noCredits.find((p) => p.credits === 1);
+  const ticketSlug = eventSlugFrom(noCredits, eventSlug);
+  const ticketAction =
+    single !== undefined && ticketSlug !== null ? `/events/${ticketSlug}/ticket` : null;
 
   return (
     <div class="action">
@@ -162,7 +237,20 @@ export function ActionArea(props: ActionAreaProps) {
       ) : null}
 
       {state.kind === "no-credits" ? (
-        <PassButtons heading="You're in. You need a credit." passes={state.passes} />
+        ticketAction !== null && single !== undefined ? (
+          <>
+            <TicketButton action={ticketAction} price={single.price} nonce={ticketNonce} />
+            <p class="action-help">One place at this gathering. No card is charged.</p>
+            <div style="margin-block-start:24px">
+              <PassButtons
+                heading="or save with 3 or 6"
+                passes={state.passes.filter((p) => p.credits > 1)}
+              />
+            </div>
+          </>
+        ) : (
+          <PassButtons heading="You're in. You need a credit." passes={state.passes} />
+        )
       ) : null}
 
       {state.kind === "ready" ? (

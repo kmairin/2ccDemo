@@ -153,7 +153,10 @@ suite("GET /", () => {
     expect(rows.length, "no circles: run `npm run seed`").toBeGreaterThan(0);
     for (const row of rows) {
       expect(html, `${row.slug} is missing from the landing page`).toContain(`/circles/${row.slug}`);
-      expect(html, `member count for ${row.slug}`).toContain(`${row.members} members`);
+      // "1 member", not "1 members" — the component pluralises and this
+      // assertion did not, so it failed whenever a one-member circle existed.
+      const members = row.members === 1 ? "1 member" : `${row.members} members`;
+      expect(html, `member count for ${row.slug}`).toContain(members);
     }
   });
 });

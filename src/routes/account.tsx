@@ -7,7 +7,12 @@
  *   GET  /circles/:slug/passes/:packageId/checkout
  *   POST /circles/:slug/passes/:packageId/buy
  *   POST /events/:slug/book
+ *   POST /events/:slug/ticket
  *   POST /account/tickets/:code/cancel
+ *
+ * `src/routes/profile.tsx` is mounted into this router (see the bottom of the
+ * file), so `/members/:id`, `/account/profile` and `/api/members/:id` are
+ * served from here too.
  *
  * Mounted at `/` in `src/index.ts`, so the paths above are the contract's URLs
  * (`design/reference/api-contract.md`). Handlers stay thin (AGENTS.md §8):
@@ -52,6 +57,7 @@ import {
   getPackageForCircle,
   listBookingsForUser,
   purchase,
+  purchaseTicket,
   type BookingSummary,
 } from "../services/commerce";
 import { listEvents } from "../services/events";
@@ -59,8 +65,17 @@ import { listMembershipsForUser, type MembershipSummary } from "../services/memb
 import { CheckoutSummary, CreditSquares, TicketPlate } from "../ui/booking";
 import { Alert, Badge, Button, EmptyState, Hero, PassCard, PassGrid, Section } from "../ui/components";
 import { Layout } from "../ui/layout";
+import profile from "./profile";
 
 const account = new Hono<{ Bindings: AuthEnv }>();
+
+/**
+ * The member surface, continued: `/members/:id`, `/account/profile` and
+ * `/api/members/:id`. Mounted at module scope so the routes are on this router
+ * before `src/index.ts` mounts it — `app.route()` copies the routes a sub-app
+ * has at the moment it is called, not the ones it grows afterwards.
+ */
+account.route("/", profile);
 
 type PageContext = Context<{ Bindings: AuthEnv }>;
 
@@ -590,6 +605,11 @@ function AccountPage(props: AccountPageProps) {
         lede="Credits are held per circle. Booking spends one, and cancelling in time puts it back."
       >
         <p class="meta num">{user.email}</p>
+        {/* The email is on this page and on no other. What members see is the
+            profile, which is what this link opens. */}
+        <Button href="/account/profile" variant="quiet">
+          Your profile
+        </Button>
       </Hero>
 
       <Section
@@ -1088,6 +1108,108 @@ account.post("/events/:slug/book", async (c) => {
         back,
       );
     }
+  }
+});
+
+/* ------------------------------------------------------------ one ticket */
+
+/**
+ * Buy one place at this gathering, without choosing a pass first: the circle's
+ * 1-credit pass and the booking, in one submit.
+ *
+ * All of the work is `purchaseTicket()` in `src/services/commerce.ts` — it
+ * calls `purchase()` and then `book()`, checks every refusal before any money
+ * moves, and reverses the order if the last place goes in between. Nothing is
+ * reimplemented here; this authorises, calls it, and turns the tagged result
+ * into a redirect and a line of copy.
+ *
+ * The `nonce` is the same one-time nonce the checkout form carries. A double
+ * tap sends it twice, `purchase()` spends it into the uniquely-indexed order
+ * reference, and the second one is recognised rather than charged.
+ */
+account.post("/events/:slug/ticket", async (c) => {
+  const me = await requireUser(c);
+  if (me instanceof Response) return me;
+
+  const slug = c.req.param("slug");
+  const back = `/events/${slug}`;
+  const body = await c.req.parseBody();
+  const nonce = typeof body.nonce === "string" && body.nonce !== "" ? body.nonce : undefined;
+
+  const result = await purchaseTicket(c.env, { userId: me.user.id, eventSlug: slug, nonce });
+
+  switch (result.status) {
+    case "ticketed":
+      return redirectWith(
+        c,
+        me.session,
+        `You're going. Ticket ${result.code}, ${formatMoney(result.amountCents, result.currency)}, order ${result.reference}.`,
+        `/account/tickets/${result.code}`,
+      );
+
+    case "already_booked":
+      return redirectWith(
+        c,
+        me.session,
+        "You already hold this place. Nothing was bought.",
+        `/account/tickets/${result.code}`,
+      );
+
+    case "already_processed":
+      return redirectWith(
+        c,
+        me.session,
+        `Already processed. Order ${result.reference} stands, and no second one was created.`,
+        result.code === null ? back : `/account/tickets/${result.code}`,
+      );
+
+    // A draft is invisible to members, so it is missing rather than refused.
+    case "event_not_found":
+    case "not_published":
+      return c.json({ error: "Gathering not found" }, 404);
+
+    case "no_single_package":
+      return redirectWith(
+        c,
+        me.session,
+        flashMessage("warn", "This circle does not sell a single ticket. Its passes are below."),
+        back,
+      );
+
+    case "not_a_member":
+      return redirectWith(
+        c,
+        me.session,
+        flashMessage("warn", "Members only. A private circle asks the host first."),
+        back,
+      );
+
+    case "membership_pending":
+      return redirectWith(
+        c,
+        me.session,
+        flashMessage("warn", "Your request is still with the host. Nothing was bought."),
+        back,
+      );
+
+    case "full":
+      return redirectWith(
+        c,
+        me.session,
+        flashMessage("warn", "That gathering is full, and nothing was bought."),
+        back,
+      );
+
+    case "reversed":
+      return redirectWith(
+        c,
+        me.session,
+        flashMessage(
+          "warn",
+          "The last place went while the order was going through. The order was reversed, so nothing stands and nothing was charged.",
+        ),
+        back,
+      );
   }
 });
 

@@ -6,6 +6,10 @@
  * initial-avatars, and a plate with no wash is the same object the covers are,
  * at 44px. Engraving is off at that size — a 0.5px hairline inside a 44px
  * square is mush, and it would cost 6KB a head.
+ *
+ * A person's name links to `/members/:id` when the caller supplies an `id`.
+ * It is optional rather than required so that a list built from rows that do
+ * not carry a user id still renders — it just renders without the link.
  */
 
 import { Plate } from "./components";
@@ -16,7 +20,25 @@ export type PersonEntry = {
   /** One line: what they do. From the seed, never generated here. */
   headline: string;
   city?: string;
+  /**
+   * The member's `users.id`. Given one, the name links to their profile at
+   * `/members/:id`; without one it stays plain text, so a caller that has no id
+   * to hand renders exactly what it rendered before.
+   */
+  id?: string;
 };
+
+/**
+ * The name is the link, not the whole card: §10.4's whole-card `::after`
+ * pattern needs the card to be the only interactive thing in it, and a person
+ * card sits inside lists that already carry links of their own.
+ *
+ * The inline style is §10.4's hit-area recipe — 44px of target grown with
+ * matching negative margins, so the row is touchable without the card getting
+ * taller. Same numbers the stylesheet uses for `.ledger-row a`.
+ */
+const NAME_LINK =
+  "display:inline-flex;align-items:center;min-height:44px;margin-block:-10px;margin-inline:-8px;padding-inline:8px";
 
 function Person(props: { person: PersonEntry; role?: string }) {
   const { person, role } = props;
@@ -25,7 +47,15 @@ function Person(props: { person: PersonEntry; role?: string }) {
       <Plate seed={person.name} shape="bare" engraving={false} monogram={initials(person.name)} />
       <div class="person-body">
         {role !== undefined ? <span class="status status--brass">{role}</span> : null}
-        <p class="person-name">{person.name}</p>
+        <p class="person-name">
+          {person.id !== undefined ? (
+            <a href={`/members/${person.id}`} style={NAME_LINK}>
+              {person.name}
+            </a>
+          ) : (
+            person.name
+          )}
+        </p>
         <p class="person-line">{person.headline}</p>
         {person.city !== undefined ? <p class="person-line">{person.city}</p> : null}
       </div>

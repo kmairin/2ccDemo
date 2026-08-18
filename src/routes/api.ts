@@ -14,8 +14,15 @@
 import { Hono, type Context } from "hono";
 import { requireApiUser, type AuthEnv } from "../auth";
 import { CIRCLE_CATEGORIES, type CircleCategory } from "../schema";
-import { getCircleBySlug, listCirclePhotos, listCircles } from "../services/circles";
-import { DEFAULT_LIMIT, MAX_LIMIT } from "../services/common";
+import {
+  getCircleBySlug,
+  listCirclePhotos,
+  listCircles,
+  listCities,
+  listCountries,
+  searchCircles,
+} from "../services/circles";
+import { DEFAULT_LIMIT, MAX_LIMIT, SEARCH_MAX_LENGTH } from "../services/common";
 import {
   currentMonthKey,
   getEventBySlug,
@@ -24,6 +31,7 @@ import {
   listEvents,
   listEventsForCircle,
   parseMonth,
+  searchEvents,
 } from "../services/events";
 import { listEventAttendees, listApprovedMembers, listMembershipsForUser } from "../services/members";
 import {
@@ -63,6 +71,22 @@ function readCategory(c: ApiContext): CircleCategory | undefined | Response {
     return c.json({ error: `category must be one of: ${CIRCLE_CATEGORIES.join(", ")}` }, 400);
   }
   return raw as CircleCategory;
+}
+
+/**
+ * `?city=` and `?country=`. Unlike `?category=` these cannot be checked
+ * against a list: geography comes from the data, so a new country appears the
+ * moment a community is based in it. They are trimmed and bounded instead, and
+ * a name nothing answers to returns an empty list rather than a 400 — an empty
+ * result and a bad request mean different things to whoever is reading this.
+ */
+function readPlace(c: ApiContext): { city?: string; country?: string } {
+  const clean = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim();
+    if (trimmed === undefined || trimmed === "") return undefined;
+    return trimmed.slice(0, SEARCH_MAX_LENGTH);
+  };
+  return { city: clean(c.req.query("city")), country: clean(c.req.query("country")) };
 }
 
 /** Liveness. Trivial and dependency-free so it answers even when the database is not. */
@@ -120,14 +144,15 @@ api.get("/health", async (c) => {
   return c.json({ status: "ok" });
 });
 
-/** The directory. `?category=` filters, `?limit=` bounds. */
+/** The directory. `?category=`, `?city=` and `?country=` filter and compose; `?limit=` bounds. */
 api.get("/circles", async (c) => {
   const limit = readLimit(c);
   if (limit instanceof Response) return limit;
   const category = readCategory(c);
   if (category instanceof Response) return category;
+  const place = readPlace(c);
 
-  const circles = await listCircles(c.env, { category, limit });
+  const circles = await listCircles(c.env, { category, ...place, limit });
   return c.json({ circles });
 });
 
@@ -162,10 +187,11 @@ api.get("/circles/:slug", async (c) => {
   });
 });
 
-/** Published gatherings, soonest first. `?circle=<slug>` filters. */
+/** Published gatherings, soonest first. `?circle=`, `?city=` and `?country=` filter. */
 api.get("/events", async (c) => {
   const limit = readLimit(c);
   if (limit instanceof Response) return limit;
+  const place = readPlace(c);
 
   const circleSlug = c.req.query("circle");
   if (circleSlug) {
@@ -175,8 +201,41 @@ api.get("/events", async (c) => {
     if (!circle) return c.json({ error: "Circle not found" }, 404);
   }
 
-  const events = await listEvents(c.env, { circleSlug, limit });
+  const events = await listEvents(c.env, { circleSlug, ...place, limit });
   return c.json({ events });
+});
+
+/**
+ * One field across the whole product: community names, taglines and
+ * descriptions, gathering titles and summaries, and the names of cities and
+ * countries. Case-insensitive substring, grouped, each group bounded by the
+ * same `?limit=` as every other list.
+ *
+ * An empty `q` is an empty result, not a 400 — the page behind this renders a
+ * prompt for it. Past `SEARCH_MAX_LENGTH` it is a payload rather than a search.
+ */
+api.get("/search", async (c) => {
+  const limit = readLimit(c);
+  if (limit instanceof Response) return limit;
+
+  const raw = c.req.query("q") ?? "";
+  if (raw.length > SEARCH_MAX_LENGTH) {
+    return c.json({ error: `q must be ${SEARCH_MAX_LENGTH} characters or fewer` }, 400);
+  }
+
+  const query = raw.trim();
+  if (query === "") {
+    return c.json({ query, communities: [], events: [], countries: [], cities: [] });
+  }
+
+  const now = new Date();
+  const [communities, events, countries, cities] = await Promise.all([
+    searchCircles(c.env, query, { limit }),
+    searchEvents(c.env, query, { from: now, limit }),
+    listCountries(c.env, { match: query, now, limit }),
+    listCities(c.env, { match: query, now, limit }),
+  ]);
+  return c.json({ query, communities, events, countries, cities });
 });
 
 /** One gathering, with its circle, who is coming, and its plates. */

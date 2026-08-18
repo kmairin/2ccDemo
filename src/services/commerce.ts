@@ -398,6 +398,149 @@ async function freeTicketCode(env: DatabaseEnv): Promise<string> {
   return free;
 }
 
+/* ----------------------------------------------------- one ticket, one step */
+
+export type TicketResult =
+  | {
+      status: "ticketed";
+      code: string;
+      reference: string;
+      amountCents: number;
+      currency: string;
+      /** True when buying the ticket also made them an approved member. */
+      joinedCircle: boolean;
+    }
+  | { status: "already_booked"; code: string }
+  /** The same form submitted twice. `code` is the place the first submit made. */
+  | { status: "already_processed"; reference: string; code: string | null }
+  /** The circle sells no 1-credit pass, so there is no single ticket to sell. */
+  | { status: "no_single_package" }
+  | { status: "event_not_found" }
+  | { status: "not_published" }
+  | { status: "not_a_member" }
+  | { status: "membership_pending" }
+  | { status: "full" }
+  /** The last place went mid-purchase; the order was reversed and nothing stands. */
+  | { status: "reversed" };
+
+/**
+ * Buy one place at one gathering, without the member having to think about
+ * passes: it buys the circle's 1-credit pass and spends that credit on this
+ * gathering, in one action.
+ *
+ * **Nothing here reimplements `purchase()` or `book()`** — each keeps its own
+ * `batch()`, so the order-plus-pass write and the booking-plus-credit write are
+ * each still all-or-nothing. What this adds is the guarantee *across* them:
+ *
+ *   1. Every refusal `book()` can produce is checked BEFORE any money moves,
+ *      so the normal way to fail is to fail having bought nothing.
+ *   2. The one refusal that survives that check is losing a race for the last
+ *      place between the two writes. That is compensated: the order is marked
+ *      `refunded` and the pass it created is deleted, in one `batch()`. So a
+ *      paid order with no booking is never left behind.
+ *
+ * The nonce is the same one-time nonce the checkout form uses — `purchase()`
+ * spends it into `orders.reference`, which is uniquely indexed, so a double tap
+ * collides in the database rather than buying twice.
+ */
+export async function purchaseTicket(
+  env: CommerceEnv,
+  input: { userId: string; eventSlug: string; nonce?: string },
+): Promise<TicketResult> {
+  const db = getDb(env);
+  const log = createLogger(env);
+
+  const [event] = await db
+    .select({
+      id: events.id,
+      circleId: events.circleId,
+      capacity: events.capacity,
+      status: events.status,
+      isPrivate: circles.isPrivate,
+      confirmed: confirmedBookingCount(events.id),
+    })
+    .from(events)
+    .innerJoin(circles, eq(circles.id, events.circleId))
+    .where(eq(events.slug, input.eventSlug))
+    .limit(1);
+  if (!event) return { status: "event_not_found" };
+  if (event.status !== "published") return { status: "not_published" };
+
+  // Already holding the place: there is nothing to buy, and a replayed form
+  // lands here rather than on a second order.
+  const [existing] = await db
+    .select({ code: bookings.code, status: bookings.status })
+    .from(bookings)
+    .where(and(eq(bookings.eventId, event.id), eq(bookings.userId, input.userId)))
+    .limit(1);
+  if (existing?.status === "confirmed") return { status: "already_booked", code: existing.code };
+
+  // Buying joins an open circle, so only an existing non-approved row can
+  // refuse: `purchase()` inserts the membership with `onConflictDoNothing`, and
+  // a pending row would survive it and then stop `book()`.
+  const [membership] = await db
+    .select({ status: circleMembers.status })
+    .from(circleMembers)
+    .where(and(eq(circleMembers.circleId, event.circleId), eq(circleMembers.userId, input.userId)))
+    .limit(1);
+  if (membership) {
+    if (membership.status === "pending") return { status: "membership_pending" };
+    if (membership.status === "declined") return { status: "not_a_member" };
+  } else if (event.isPrivate) {
+    return { status: "not_a_member" };
+  }
+
+  if (placesLeft(event.capacity, event.confirmed) <= 0) return { status: "full" };
+
+  const single = (await listPackages(env, event.circleId)).find((offer) => offer.credits === 1);
+  if (!single) return { status: "no_single_package" };
+
+  const bought = await purchase(env, {
+    userId: input.userId,
+    circleId: event.circleId,
+    packageId: single.id,
+    nonce: input.nonce,
+  });
+  if (bought.status === "package_not_found") return { status: "no_single_package" };
+  if (bought.status === "already_processed") {
+    const [made] = await db
+      .select({ code: bookings.code })
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.eventId, event.id),
+          eq(bookings.userId, input.userId),
+          eq(bookings.status, "confirmed"),
+        ),
+      )
+      .limit(1);
+    return { status: "already_processed", reference: bought.reference, code: made?.code ?? null };
+  }
+
+  const booked = await book(env, { userId: input.userId, eventSlug: input.eventSlug });
+  if (booked.status === "booked" || booked.status === "already_booked") {
+    log.info("ticket bought", { orderId: bought.orderId, eventId: event.id });
+    return {
+      status: "ticketed",
+      code: booked.code,
+      reference: bought.reference,
+      amountCents: bought.amountCents,
+      currency: bought.currency,
+      joinedCircle: bought.joinedCircle,
+    };
+  }
+
+  // Compensation, not a retry: the credit exists but the place does not, so the
+  // order stops standing. One `batch()` — a refunded order still holding a live
+  // pass would be a credit nobody paid for.
+  await batch(env, [
+    db.update(orders).set({ status: "refunded" }).where(eq(orders.id, bought.orderId)),
+    db.delete(passes).where(eq(passes.id, bought.passId)),
+  ]);
+  log.warn("ticket reversed", { orderId: bought.orderId, reason: booked.status });
+  return { status: "reversed" };
+}
+
 /**
  * Give the place back and return the credit — one `batch()`, and `greatest(…,0)`
  * so a double cancel can never drive a pass below zero credits used.

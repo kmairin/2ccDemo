@@ -1,17 +1,22 @@
 /**
- * The people in a circle, and the people coming to a gathering.
+ * The people in a circle, the people coming to a gathering, and one member's
+ * own profile.
  *
- * Two rules the product cares about live here rather than in a template:
- * pending members are never returned by the public list, and the host is always
- * first in it.
+ * Three rules the product cares about live here rather than in a template:
+ * pending members are never returned by the public list, the host is always
+ * first in it, and **no function in this file ever selects `users.email`**. The
+ * email is the identity (see `src/auth.ts`); a public profile that printed it
+ * would hand every member's address to anyone who opened the page.
  */
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gte, sql } from "drizzle-orm";
 import { getDb, type DatabaseEnv } from "../db";
 import {
   bookings,
   circleMembers,
   circles,
+  events,
   users,
+  type CircleCategory,
   type MemberRole,
   type MembershipStatus,
 } from "../schema";
@@ -152,4 +157,165 @@ export async function listMembershipsForUser(
     .where(eq(circleMembers.userId, userId))
     .orderBy(asc(circleMembers.createdAt))
     .limit(boundLimit(options.limit));
+}
+
+/* ------------------------------------------------- one member's own profile */
+
+/**
+ * A member as their public profile shows them.
+ *
+ * There is deliberately no `email` field. `users.email` is the sign-in
+ * identity, and the only place it is ever printed is the member's own account
+ * page, from their own session — never from here, and never from
+ * `/members/:id`.
+ */
+export interface MemberProfile {
+  id: string;
+  name: string;
+  headline: string | null;
+  city: string | null;
+  bio: string | null;
+}
+
+/** One circle a member belongs to, as their profile lists it. Approved only. */
+export interface MemberCircle {
+  slug: string;
+  name: string;
+  tagline: string;
+  city: string;
+  category: CircleCategory;
+  role: MemberRole;
+}
+
+/** A place this member holds at a gathering still to come. */
+export interface MemberEvent {
+  slug: string;
+  title: string;
+  venue: string;
+  city: string;
+  /** ISO 8601, UTC. The renderer decides the time zone, not the query. */
+  startsAt: string;
+  circleSlug: string;
+  circleName: string;
+}
+
+/** The four columns a member may change about themselves. */
+export interface ProfileEdit {
+  name: string;
+  headline: string | null;
+  city: string | null;
+  bio: string | null;
+}
+
+/**
+ * One member by id, or null when the id names nobody — which is what makes
+ * `/members/:id` a 404 rather than a blank page. The column list is explicit
+ * so `email` cannot arrive here by widening a `select()`.
+ */
+export async function getMemberProfile(
+  env: DatabaseEnv,
+  userId: string,
+): Promise<MemberProfile | null> {
+  const db = getDb(env);
+  const [row] = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      headline: users.headline,
+      city: users.city,
+      bio: users.bio,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * The circles this member is in — **approved only**. A pending request is
+ * between them and the host, and a public profile must not announce it.
+ * `listMembershipsForUser` above is the member's own list and does include
+ * pending ones; the two are not interchangeable.
+ */
+export async function listApprovedCirclesForMember(
+  env: DatabaseEnv,
+  userId: string,
+  options: { limit?: number } = {},
+): Promise<MemberCircle[]> {
+  const db = getDb(env);
+  return db
+    .select({
+      slug: circles.slug,
+      name: circles.name,
+      tagline: circles.tagline,
+      city: circles.city,
+      category: circles.category,
+      role: circleMembers.role,
+    })
+    .from(circleMembers)
+    .innerJoin(circles, eq(circles.id, circleMembers.circleId))
+    .where(and(eq(circleMembers.userId, userId), eq(circleMembers.status, "approved")))
+    // Circles they run first, then in the order they joined — the same
+    // ordering the members strip uses, for the same reason.
+    .orderBy(asc(hostFirst), asc(circleMembers.createdAt))
+    .limit(boundLimit(options.limit));
+}
+
+/**
+ * Gatherings this member is going to: confirmed bookings on published dates
+ * that have not happened yet, soonest first. A cancelled booking and a draft
+ * gathering both drop out in SQL rather than in the template.
+ */
+export async function listUpcomingEventsForMember(
+  env: DatabaseEnv,
+  userId: string,
+  now: Date,
+  options: { limit?: number } = {},
+): Promise<MemberEvent[]> {
+  const db = getDb(env);
+  const rows = await db
+    .select({
+      slug: events.slug,
+      title: events.title,
+      venue: events.venue,
+      city: events.city,
+      startsAt: events.startsAt,
+      circleSlug: circles.slug,
+      circleName: circles.name,
+    })
+    .from(bookings)
+    .innerJoin(events, eq(events.id, bookings.eventId))
+    .innerJoin(circles, eq(circles.id, events.circleId))
+    .where(
+      and(
+        eq(bookings.userId, userId),
+        eq(bookings.status, "confirmed"),
+        eq(events.status, "published"),
+        gte(events.startsAt, now),
+      ),
+    )
+    .orderBy(asc(events.startsAt))
+    .limit(boundLimit(options.limit));
+
+  return rows.map((row) => ({ ...row, startsAt: row.startsAt.toISOString() }));
+}
+
+/**
+ * Save what a member typed about themselves. One statement, so there is
+ * nothing for `batch()` to make atomic — and the empty optional fields are
+ * stored as NULL rather than `""`, so a profile shows a line or shows nothing
+ * instead of showing a blank one.
+ *
+ * The caller validates and trims (see `src/routes/profile.tsx`); this writes.
+ */
+export async function updateMemberProfile(
+  env: DatabaseEnv,
+  userId: string,
+  edit: ProfileEdit,
+): Promise<void> {
+  const db = getDb(env);
+  await db
+    .update(users)
+    .set({ name: edit.name, headline: edit.headline, city: edit.city, bio: edit.bio })
+    .where(eq(users.id, userId));
 }
