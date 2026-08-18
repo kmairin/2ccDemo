@@ -122,15 +122,60 @@ const idempotent = statements.map((s) => {
   const constraint = s.match(/^ALTER TABLE ONLY "([^"]+)"\."([^"]+)"\s+ADD CONSTRAINT "([^"]+)"/i);
   if (constraint) {
     const [, schema, table, name] = constraint;
-    return `DO $$ BEGIN ${s}; EXCEPTION WHEN duplicate_object THEN NULL; WHEN duplicate_table THEN NULL; END $$`
+    // Adding a constraint that is already there raises several different
+    // SQLSTATEs depending on kind (primary key, unique, foreign key), and a
+    // half-caught set leaves expected noise in the failure report that would
+    // hide a real problem. These statements are purely "make sure this exists".
+    return `DO $$ BEGIN ${s}; EXCEPTION WHEN others THEN NULL; END $$`
       .replace(/\s+/g, " ")
       .replace("__NAME__", `${schema}.${table}.${name}`);
   }
   return s;
 });
 
+/**
+ * Order the data by dependency, not alphabetically.
+ *
+ * pg_dump emits INSERTs in alphabetical table order — `bookings` long before the
+ * `users` and `events` rows they point at. That only survives because pg_dump
+ * adds foreign keys *after* the data. Run the same script a second time, when
+ * the constraints already exist, and every child insert fails: 446 of 518
+ * statements, which is exactly how the deployed database ended up with all ten
+ * tables and no rows.
+ *
+ * Parents first makes the whole file re-runnable.
+ */
+const TABLE_ORDER = [
+  "users", "circles", "packages", "events", "circle_members",
+  "orders", "passes", "photos", "bookings", "sessions",
+];
+
+function tableOf(statement) {
+  const m = statement.match(/^INSERT INTO "public"\."([^"]+)"/i);
+  return m ? m[1] : null;
+}
+
+const ddlBefore = idempotent.filter((s) => /^CREATE TABLE/i.test(s));
+const inserts = idempotent.filter((s) => /^INSERT INTO/i.test(s));
+const ddlAfter = idempotent.filter((s) => !/^CREATE TABLE/i.test(s) && !/^INSERT INTO/i.test(s));
+
+const unknownTables = [...new Set(inserts.map(tableOf))].filter((t) => t && !TABLE_ORDER.includes(t));
+if (unknownTables.length) {
+  throw new Error(
+    `TABLE_ORDER is missing: ${unknownTables.join(", ")}. Add them in dependency order.`,
+  );
+}
+
+const orderedInserts = inserts
+  .map((s, i) => ({ s, i, rank: TABLE_ORDER.indexOf(tableOf(s)) }))
+  .sort((a, b) => a.rank - b.rank || a.i - b.i)   // stable within a table
+  .map((x) => x.s);
+
+// Constraints last, so the data is already consistent when they are enforced.
+const ordered = [...ddlBefore, ...orderedInserts, ...ddlAfter];
+
 const kinds = {};
-for (const s of idempotent) {
+for (const s of ordered) {
   const k = (s.match(/^[A-Z ]+/i) || ["?"])[0].trim().split(/\s+/).slice(0, 2).join(" ");
   kinds[k] = (kinds[k] || 0) + 1;
 }
@@ -145,13 +190,13 @@ const body = `/**
  * Regenerate after any change to src/schema.ts or scripts/seed.mjs.
  */
 
-/** ${idempotent.length} statements: ${Object.entries(kinds).map(([k, v]) => `${v} ${k}`).join(", ")}. */
-export const BOOTSTRAP_STATEMENTS: readonly string[] = ${JSON.stringify(idempotent, null, 0)};
+/** ${ordered.length} statements: ${Object.entries(kinds).map(([k, v]) => `${v} ${k}`).join(", ")}. */
+export const BOOTSTRAP_STATEMENTS: readonly string[] = ${JSON.stringify(ordered, null, 0)};
 `;
 
 writeFileSync("src/bootstrap-sql.ts", body);
 console.log(
-  `src/bootstrap-sql.ts: ${idempotent.length} statements, ${(body.length / 1024).toFixed(0)} KB`,
+  `src/bootstrap-sql.ts: ${ordered.length} statements, ${(body.length / 1024).toFixed(0)} KB`,
 );
 for (const [k, v] of Object.entries(kinds).sort((a, b) => b[1] - a[1])) {
   console.log(`  ${String(v).padStart(4)}  ${k}`);

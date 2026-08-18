@@ -66,7 +66,16 @@ function readCategory(c: ApiContext): CircleCategory | undefined | Response {
 }
 
 /** Liveness. Trivial and dependency-free so it answers even when the database is not. */
-api.get("/health", (c) => c.json({ status: "ok" }));
+api.get("/health", async (c) => {
+  // `?schema=1` reports how the one-time bootstrap went. Deployed there is no
+  // console, so without this a half-applied bootstrap just looks like an app
+  // that serves empty lists. Counts and our own SQL errors only.
+  if (c.req.query("schema") === "1") {
+    const { bootstrapReport } = await import("../ensure-schema");
+    return c.json({ status: "ok", bootstrap: bootstrapReport });
+  }
+  return c.json({ status: "ok" });
+});
 
 /** The directory. `?category=` filters, `?limit=` bounds. */
 api.get("/circles", async (c) => {

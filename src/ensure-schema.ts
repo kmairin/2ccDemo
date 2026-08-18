@@ -35,20 +35,52 @@ type EnsureEnv = DatabaseEnv & LoggerEnv;
 /** One attempt per isolate. Concurrent callers await the same promise. */
 let inFlight: Promise<void> | null = null;
 
-async function circlesTableExists(env: EnsureEnv): Promise<boolean> {
+/**
+ * What went wrong last time we tried to build the schema.
+ *
+ * Deployed, there is no console and no way to run a query by hand, so a
+ * bootstrap that half-works is otherwise invisible — the app just serves empty
+ * lists. This holds the first few failures so `GET /api/health?schema=1` can
+ * report them. It contains our own SQL and the database's error text: no user
+ * data, no secrets. Remove it with the rest of the bootstrap scaffolding.
+ */
+export const bootstrapReport: {
+  ran: boolean;
+  applied: number;
+  failed: number;
+  failures: { statement: string; error: string }[];
+} = { ran: false, applied: 0, failed: 0, failures: [] };
+
+/** First scalar of the first row. The data-service proxy returns positional arrays. */
+function scalar(rows: unknown): number {
+  const first: unknown = (rows as unknown[])[0];
+  if (Array.isArray(first)) return Number(first[0] ?? 0);
+  const obj = first as Record<string, unknown> | undefined;
+  return Number(Object.values(obj ?? {})[0] ?? 0);
+}
+
+/**
+ * Is the app's world already here?
+ *
+ * Asking information_schema first — rather than `select from circles` — is what
+ * separates "no schema" from "cannot reach the database right now": an
+ * unreachable database throws, and the caller leaves it alone.
+ *
+ * Having the TABLE is not enough. The first deployment created all ten tables
+ * and then landed **no rows**, so every page answered 200 with an empty list,
+ * which is worse than an error because nothing looks wrong. A circles table
+ * with zero rows means the data never arrived, so treat it as not-yet-built.
+ */
+async function worldExists(env: EnsureEnv): Promise<boolean> {
   const db = getDb(env);
-  // Asking information_schema — rather than `select from circles` — is what
-  // separates "no schema" from "cannot reach the database right now".
-  const rows = await db.execute(
-    sql`select count(*)::int from information_schema.tables
-        where table_schema = 'public' and table_name = 'circles'`,
+  const tables = scalar(
+    await db.execute(
+      sql`select count(*)::int from information_schema.tables
+          where table_schema = 'public' and table_name = 'circles'`,
+    ),
   );
-  const first: unknown = (rows as unknown as unknown[])[0];
-  // The data-service proxy returns positional arrays, not mapped objects.
-  const n = Array.isArray(first)
-    ? Number(first[0] ?? 0)
-    : Number((first as { count?: number } | undefined)?.count ?? 0);
-  return n > 0;
+  if (tables === 0) return false;
+  return scalar(await db.execute(sql`select count(*)::int from circles`)) > 0;
 }
 
 async function build(env: EnsureEnv): Promise<void> {
@@ -63,16 +95,18 @@ async function build(env: EnsureEnv): Promise<void> {
       applied++;
     } catch (err) {
       failed++;
+      const error = err instanceof Error ? err.message : String(err);
+      if (bootstrapReport.failures.length < 8) {
+        bootstrapReport.failures.push({ statement: statement.slice(0, 200), error });
+      }
       // Log the first few only: a broken bootstrap would otherwise write 500
       // lines and bury the cause.
-      if (failed <= 3) {
-        log.error("bootstrap statement failed", {
-          statement: statement.slice(0, 120),
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
+      if (failed <= 3) log.error("bootstrap statement failed", { statement: statement.slice(0, 120), err: error });
     }
   }
+  bootstrapReport.ran = true;
+  bootstrapReport.applied = applied;
+  bootstrapReport.failed = failed;
   log.info("database bootstrapped", { applied, failed, total: BOOTSTRAP_STATEMENTS.length });
 }
 
@@ -85,7 +119,7 @@ export function ensureSchema(env: EnsureEnv): Promise<void> {
 
   inFlight = (async () => {
     try {
-      if (await circlesTableExists(env)) return;
+      if (await worldExists(env)) return;
       await build(env);
     } catch (err) {
       // Could not even ask — almost certainly the database being unreachable.
