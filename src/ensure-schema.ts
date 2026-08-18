@@ -27,7 +27,7 @@
  */
 import { sql } from "drizzle-orm";
 import { BOOTSTRAP_STATEMENTS } from "./bootstrap-sql";
-import { getDb, type DatabaseEnv } from "./db";
+import { batch, getDb, type DatabaseEnv } from "./db";
 import { createLogger, type LoggerEnv } from "./logger";
 
 type EnsureEnv = DatabaseEnv & LoggerEnv;
@@ -80,7 +80,16 @@ async function worldExists(env: EnsureEnv): Promise<boolean> {
     ),
   );
   if (tables === 0) return false;
-  return scalar(await db.execute(sql`select count(*)::int from circles`)) > 0;
+
+  // Not just circles. The deployed run stopped part-way and left circles
+  // populated but events, members and photos empty — and a circles-only check
+  // then treats that as "built" and never retries. Ask for the tables that come
+  // last in the load order too.
+  const circles = scalar(await db.execute(sql`select count(*)::int from circles`));
+  if (circles === 0) return false;
+  const events = scalar(await db.execute(sql`select count(*)::int from events`));
+  if (events === 0) return false;
+  return scalar(await db.execute(sql`select count(*)::int from bookings`)) > 0;
 }
 
 async function build(env: EnsureEnv): Promise<void> {
@@ -89,21 +98,47 @@ async function build(env: EnsureEnv): Promise<void> {
   let applied = 0;
   let failed = 0;
 
-  for (const statement of BOOTSTRAP_STATEMENTS) {
+  /**
+   * Send the statements in CHUNKS, not one at a time.
+   *
+   * Each round trip to the data service is a subrequest, and a Worker gets a
+   * limited number per request. Executing 518 statements individually silently
+   * hit that ceiling on the deployed app: it got through users, circles and
+   * packages — 47 inserts — and then the request was cut off mid-run, leaving
+   * events, members, photos and bookings empty with no error recorded anywhere,
+   * because the isolate died before it could record one.
+   *
+   * `batch` from src/db.ts sends many statements in one round trip. It is
+   * all-or-nothing, so a chunk that fails is retried statement by statement to
+   * find out which one — costing subrequests only when something is wrong.
+   */
+  const CHUNK = 40;
+  const asQuery = (statement: string) => ({ toSQL: () => ({ sql: statement, params: [] as unknown[] }) });
+
+  for (let i = 0; i < BOOTSTRAP_STATEMENTS.length; i += CHUNK) {
+    const chunk = BOOTSTRAP_STATEMENTS.slice(i, i + CHUNK);
     try {
-      await db.execute(sql.raw(statement));
-      applied++;
-    } catch (err) {
-      failed++;
-      const error = err instanceof Error ? err.message : String(err);
-      if (bootstrapReport.failures.length < 8) {
-        bootstrapReport.failures.push({ statement: statement.slice(0, 200), error });
+      await batch(env, chunk.map(asQuery));
+      applied += chunk.length;
+    } catch {
+      for (const statement of chunk) {
+        try {
+          await db.execute(sql.raw(statement));
+          applied++;
+        } catch (err) {
+          failed++;
+          const error = err instanceof Error ? err.message : String(err);
+          if (bootstrapReport.failures.length < 8) {
+            bootstrapReport.failures.push({ statement: statement.slice(0, 200), error });
+          }
+          if (failed <= 3) {
+            log.error("bootstrap statement failed", { statement: statement.slice(0, 120), err: error });
+          }
+        }
       }
-      // Log the first few only: a broken bootstrap would otherwise write 500
-      // lines and bury the cause.
-      if (failed <= 3) log.error("bootstrap statement failed", { statement: statement.slice(0, 120), err: error });
     }
   }
+
   bootstrapReport.ran = true;
   bootstrapReport.applied = applied;
   bootstrapReport.failed = failed;
