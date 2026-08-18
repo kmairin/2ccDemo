@@ -24,15 +24,35 @@ const ADMIN_URL =
 const TEST_DB = "loop_bootstrap_test";
 const TEST_URL = ADMIN_URL.replace(/\/[^/]*$/, `/${TEST_DB}`);
 
-/** Every batch fails, which is the deployed behaviour this file exists for. */
+/**
+ * Two deployed behaviours worth simulating: batches that fail, and round trips
+ * that are slow. The second is the one that kept the site down after the first
+ * fix — a trip budget bounds how MUCH is attempted, not how LONG it takes.
+ */
 const batchAlwaysFails = vi.hoisted(() => ({ on: false }));
+const slowTripMs = vi.hoisted(() => ({ ms: 0 }));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 vi.mock("../src/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/db")>();
   return {
     ...actual,
     batch: async (...args: Parameters<typeof actual.batch>) => {
+      if (slowTripMs.ms) await sleep(slowTripMs.ms);
       if (batchAlwaysFails.on) throw new Error("batch unavailable");
       return actual.batch(...args);
+    },
+    getDb: (env: Parameters<typeof actual.getDb>[0]) => {
+      const real = actual.getDb(env);
+      if (!slowTripMs.ms) return real;
+      return new Proxy(real, {
+        get(target, prop, receiver) {
+          if (prop !== "execute") return Reflect.get(target, prop, receiver);
+          return async (...args: unknown[]) => {
+            await sleep(slowTripMs.ms);
+            return (target.execute as (...a: unknown[]) => unknown)(...args);
+          };
+        },
+      });
     },
   };
 });
@@ -170,6 +190,30 @@ describe.runIf(available)("the deployed bootstrap", () => {
     // Deliberately the slow path: ~28 requests, every statement on its own
     // round trip, each of which opens and closes a local connection.
   }, 120_000);
+
+  it("gives up on a deadline, not just a trip count, when every trip is slow", async () => {
+    await asProduction();
+    // Nothing recorded yet, so this is the expensive first-contact path — the
+    // one that deployed took ninety seconds a request and hung the whole site.
+    await client.unsafe(`drop table if exists app_meta`);
+    resetEnsureSchemaForTests();
+    batchAlwaysFails.on = true;
+    slowTripMs.ms = 400;
+    try {
+      const before = Date.now();
+      await ensureSchema(env);
+      const elapsed = Date.now() - before;
+
+      // 35 trips at 400ms each is 14 seconds if only the COUNT is bounded.
+      // The deadline is what has to stop it, and the page has to get control
+      // back regardless of what the database is doing.
+      expect(elapsed).toBeLessThan(9_000);
+      expect(bootstrapReport.budgetExhausted).toBe(true);
+    } finally {
+      batchAlwaysFails.on = false;
+      slowTripMs.ms = 0;
+    }
+  }, 60_000);
 
   it("builds the whole world in one request when the database is healthy", async () => {
     await asProduction();

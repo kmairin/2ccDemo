@@ -75,6 +75,19 @@ api.get("/health", async (c) => {
     return c.json({ status: "ok", bootstrap: bootstrapReport });
   }
 
+  // TEMPORARY diagnostic. `?schema=1` reports what the isolate ANSWERING IT has
+  // done, and this route is the one route that never builds anything — so it
+  // kept answering with an empty report while the pages next door were failing,
+  // which is worse than no diagnostic at all. This runs one bounded step and
+  // reports that step's own failures, on the same isolate, so the database's
+  // error text can actually be read from outside. Bounded by the same budget
+  // and deadline as any page request. Remove with the rest of the scaffolding.
+  if (c.req.query("bootstrap") === "1") {
+    const { ensureSchema, bootstrapReport } = await import("../ensure-schema");
+    await ensureSchema(c.env);
+    return c.json({ status: "ok", bootstrap: bootstrapReport });
+  }
+
   // TEMPORARY diagnostic. Deployed there is no console and no way to run a
   // query by hand, so when a page 500s the only alternative is guessing at the
   // schema. Reports column names and the error text of the query the directory

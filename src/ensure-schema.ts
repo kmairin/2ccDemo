@@ -115,6 +115,13 @@ export const ROUNDTRIP_BUDGET = 20;
 const CHUNK = 40;
 
 /**
+ * How long one request may spend building the database before it gives up and
+ * serves the page. The page is the product; the bootstrap is scaffolding, and
+ * scaffolding does not get to decide whether the site answers.
+ */
+const DEADLINE_MS = 5_000;
+
+/**
  * How long a rebuild may hold the lease before another isolate may take it.
  *
  * Long enough that a slow-but-working rebuild is not interrupted, short enough
@@ -169,14 +176,28 @@ export const bootstrapReport: {
   failures: [],
 };
 
-/** Counts down the round trips one request may spend. */
+/**
+ * Two limits, because counting round trips is not enough.
+ *
+ * The first version of this counted trips alone, capped at twenty, and the site
+ * still hung for ninety seconds a request. Twenty round trips is only cheap if
+ * a round trip is cheap, and against an unhappy database it is not — the count
+ * bounds how much work is attempted, and says nothing about how long that takes.
+ *
+ * So the deadline is the limit that actually protects the page, and it is
+ * checked before every trip. Whatever the database is doing, this request stops
+ * asking after DEADLINE_MS and lets the page render.
+ */
 class Budget {
-  constructor(private left: number) {}
+  constructor(
+    private left: number,
+    private readonly until: number,
+  ) {}
   get spent(): boolean {
-    return this.left <= 0;
+    return this.left <= 0 || Date.now() >= this.until;
   }
   take(): boolean {
-    if (this.left <= 0) {
+    if (this.spent) {
       bootstrapReport.budgetExhausted = true;
       return false;
     }
@@ -350,7 +371,7 @@ function readCursor(stored: string | null): number {
  * budget every request and the data load would never begin at all. The test
  * suite pins exactly that case.
  */
-async function step(env: EnsureEnv, budget: Budget): Promise<boolean> {
+async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<boolean> {
   const log = createLogger(env);
 
   /**
@@ -366,7 +387,10 @@ async function step(env: EnsureEnv, budget: Budget): Promise<boolean> {
   } catch {
     // No `app_meta`, so nothing to resume and nowhere to record progress.
     // Create the schema and stop there; the next request loads the data.
-    await apply(env, CREATE_STATEMENTS, 0, new Budget(CREATE_STATEMENTS.length + 2));
+    // Its own trip allowance, because the create pass must be able to finish
+    // even when every statement costs a trip of its own — but the SAME
+    // deadline, so a slow database cannot turn it into a ninety-second page.
+    await apply(env, CREATE_STATEMENTS, 0, new Budget(CREATE_STATEMENTS.length + 2, deadline));
     return false;
   }
 
@@ -452,7 +476,8 @@ async function step(env: EnsureEnv, budget: Budget): Promise<boolean> {
 export async function ensureSchema(env: EnsureEnv): Promise<void> {
   if (settled) return;
   try {
-    if (await step(env, new Budget(ROUNDTRIP_BUDGET))) settled = true;
+    const deadline = Date.now() + DEADLINE_MS;
+    if (await step(env, new Budget(ROUNDTRIP_BUDGET, deadline), deadline)) settled = true;
   } catch (err) {
     // Almost certainly the database being unreachable. Let the request carry on
     // and let a later one retry; a blip must not take the page down with it.
