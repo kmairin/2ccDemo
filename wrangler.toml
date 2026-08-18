@@ -1,0 +1,37 @@
+# Local dev + build config ONLY.
+#
+# The live deployment's name, routes and compatibility settings are managed by
+# Loop — editing them here changes nothing about https://2ccdemo.sv-academy.org.
+# Keep `main` pointing at your Hono entry point; the build bundles from it.
+
+name = "2ccdemo"
+main = "src/index.ts"
+compatibility_date = "2026-06-25"
+compatibility_flags = ["nodejs_compat"]
+
+# Local-only. The deployed app reads LOG_LEVEL from the Loop dashboard and
+# defaults to `info`, so debug output stays off in production unless you turn it
+# on. Locally you want everything.
+[vars]
+LOG_LEVEL = "debug"
+
+# Your LOCAL database. Not a secret — it points at Postgres on your own machine,
+# which INSTALL.md sets up. The app running on SV Cloud ignores this: it reaches
+# your real database through the platform, with no connection string and no
+# password anywhere in your code.
+#
+# Nothing to fill in. If Postgres is running, `npm run dev` just works.
+#
+# This is also your way out. If you ever host this app somewhere else, set
+# DATABASE_URL to that Postgres and everything works unchanged — nothing here is
+# locked to one provider.
+DATABASE_URL = "postgres://postgres:postgres@localhost:5432/loop_dev"
+
+# Your file storage, for LOCAL development.
+#
+# `npm run dev` gives you a local copy — real storage on your machine, separate
+# from the deployed app, safe to wipe. The live binding is managed by Loop; this
+# entry only tells wrangler what to hand you locally.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "loop-2ccdemo"
