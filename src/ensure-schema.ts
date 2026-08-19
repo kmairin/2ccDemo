@@ -289,8 +289,18 @@ async function worldLooksLoaded(env: EnsureEnv): Promise<boolean> {
      * marker matched. Ask the database instead — one round trip, once per
      * isolate, and a missing table repairs itself instead of persisting.
      */
-    const shape = await inspectSchema(env);
-    if (shape.absent.length > 0 || shape.absentIndexes.length > 0) return false;
+    /**
+     * Tables block; indexes do not.
+     *
+     * Sixteen of the bundle's indexes cannot be created on the deployed
+     * database at all — its tables are `schema_locked`, and it refuses both
+     * `CREATE INDEX` and the `SET (schema_locked = false)` that would permit
+     * one ("can only be set/reset on its own"). Treating that as incomplete
+     * made every cold isolate re-run a twenty-trip repair that could never
+     * succeed. They are attempted once per bundle version and recorded; the
+     * code no longer depends on any of them being there.
+     */
+    if ((await inspectSchema(env)).absent.length > 0) return false;
     if (!BUNDLE_HAS_EVENTS) return true;
     const db = getDb(env);
     return scalar(await db.execute(sql`select count(*)::int from events`)) > 0;
@@ -691,7 +701,7 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
      */
     const { missing, absent, absentIndexes } = await inspectSchema(env);
     const shapeStamped = (await readMeta(env, "schema_version")) === BOOTSTRAP_VERSION;
-    if (missing.length > 0 || absentIndexes.length > 0 || !shapeStamped) {
+    if (missing.length > 0 || !shapeStamped) {
       // Nothing here changes an existing table's shape, so none of it needs the
       // rebuild this database cannot finish. Creating what is absent is enough.
       const onlyAdditions =
@@ -788,7 +798,10 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
          * it: without a durable copy, diagnosing this costs a deploy per guess.
          */
         const after = await inspectSchema(env);
-        const stillAbsent = [...after.absent, ...after.absentIndexes];
+        // Only a missing TABLE may hold the stamp back. A missing index is
+        // recorded above and moved past, because on this database some of them
+        // can never be created and nothing depends on them.
+        const stillAbsent = after.absent;
         if (stillAbsent.length > 0) {
           await writeMeta(
             env,

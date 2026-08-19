@@ -85,9 +85,19 @@ export async function signIn(env: AuthEnv, email: string, name: string): Promise
     const [created] = await db
       .insert(users)
       .values({ id: newId(), email: normalised, name: trimmed })
-      // Two sign-ins racing on the same new email: the loser takes the winner's
-      // row instead of failing the request on the unique index.
-      .onConflictDoNothing({ target: users.email })
+      /**
+       * Two sign-ins racing on the same new email: the loser takes the winner's
+       * row instead of failing the request.
+       *
+       * No target column. Naming one requires a matching unique index to exist,
+       * and `users_email_idx` does NOT exist on the deployed database — its
+       * tables are `schema_locked` and refuse both `CREATE INDEX` and the
+       * unlock that would allow it. With a target this line threw on every
+       * brand-new member, which is every visitor who picks the guest account.
+       * Targetless covers any unique violation, so it behaves identically where
+       * the index does exist and stops throwing where it does not.
+       */
+      .onConflictDoNothing()
       .returning();
     user = created ?? (await findUserByEmail(env, normalised));
     if (!user) throw new Error("signIn: could not create or find the member");

@@ -412,6 +412,54 @@ describe.runIf(available)("the deployed bootstrap", () => {
     expect(await rows("wallets")).toBe(1);
   });
 
+  /**
+   * The deployed database cannot create indexes AT ALL, and never could.
+   *
+   * Its tables are `schema_locked`. It refuses `CREATE INDEX` on one, and it
+   * refuses the `SET (schema_locked = false)` that would permit it — "can only
+   * be set/reset on its own". Sixteen of the bundle's twenty-five indexes are
+   * absent on production as a result, and no amount of retrying will add them.
+   *
+   * That is survivable only while nothing DEPENDS on an index. Two lines did:
+   * `ON CONFLICT (email)` in `signIn` and `ON CONFLICT (user_id)` in `topUp`.
+   * Naming a conflict target requires a matching unique index, so both raised
+   * "there is no unique or exclusion constraint matching the ON CONFLICT
+   * specification" — every top-up answered 500, and so would every brand-new
+   * member, which is every visitor who picks the guest account.
+   *
+   * Local Postgres has no `schema_locked`, so the failure is recreated the only
+   * portable way: drop the indexes. This lives here, on this file's OWN
+   * database, because dropping an index the whole schema shares would break
+   * every suite running beside it — which it did.
+   */
+  it("signs in and tops up with the unique indexes missing", async () => {
+    await asProduction();
+    await client.unsafe(`drop index if exists users_email_idx`);
+    await client.unsafe(`drop index if exists wallets_user_id_idx`);
+
+    const { signIn } = await import("../src/auth");
+    const { topUp, getWallet } = await import("../src/services/wallet");
+
+    // A member nobody has seen before: the insert, and its ON CONFLICT.
+    const session = await signIn(env, "no-index@2cc.club", "No Index");
+    expect(session.userId).toBeTruthy();
+
+    const before = await getWallet(env, session.userId, "USD");
+    expect(before.balanceCents).toBe(0);
+
+    const result = await topUp(env, {
+      userId: session.userId,
+      amountCents: 25_000,
+      currency: "USD",
+      nonce: "no-index-nonce",
+    });
+    expect(result.status).toBe("topped_up");
+
+    // Two readings, the action between them, both from the database.
+    const after = await getWallet(env, session.userId, "USD");
+    expect(after.balanceCents).toBe(25_000);
+  });
+
   it("records where it got to when the deadline abandons it mid-load", async () => {
     /**
      * Deployed, a request applied 160 statements and recorded a cursor of ZERO.

@@ -214,7 +214,10 @@ export async function topUp(
         balanceCents: 0,
         currency: input.currency,
       })
-      .onConflictDoNothing({ target: wallets.userId }),
+      // Targetless on purpose: naming `userId` needs a unique index, and the
+      // deployed database refuses to create one (see src/auth.ts). The read
+      // above already decided whether this row is needed.
+      .onConflictDoNothing(),
     // Relative, never absolute: two top-ups that interleave both land. The
     // CASE re-denominates an empty wallet and leaves a funded one alone, so the
     // decision above cannot be undone by a write that raced it.
