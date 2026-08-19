@@ -54,8 +54,10 @@
  * Commit the generated SQL. A schema nobody can reproduce is a schema that
  * breaks on the next machine.
  */
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   pgTable,
@@ -454,3 +456,88 @@ export const photos = pgTable(
 
 export type Photo = typeof photos.$inferSelect;
 export type NewPhoto = typeof photos.$inferInsert;
+
+/* ------------------------------------------------------------------ money */
+
+/**
+ * What moved, and which way. `topup` and `refund` add; `spend` subtracts. The
+ * sign lives in the kind rather than in `amountCents`, so a ledger row can be
+ * read without remembering a convention, and so `sum(amount_cents)` can never
+ * be mistaken for a balance.
+ */
+export const WALLET_TXN_KINDS = ["topup", "spend", "refund"] as const;
+export type WalletTxnKind = (typeof WALLET_TXN_KINDS)[number];
+
+/**
+ * A member's demo balance. One row per member (`wallets_user_id_idx` is
+ * unique), one currency, integer cents — never a float, and never a total
+ * across currencies.
+ *
+ * **`wallets_balance_nonneg` is the reason an overspend cannot happen.** The
+ * debit in `purchase()` is a relative `balance_cents - price` inside the same
+ * `batch()` as the order, with no guard in its own WHERE. If the balance would
+ * go negative the CHECK aborts the whole transaction, so the order does not
+ * land either. A `where balance_cents >= price` guard would instead update no
+ * rows and let the order through unpaid — the database decides, not a check in
+ * the handler that two fast taps can race past.
+ *
+ * The currency is fixed while there is money in the wallet and re-denominates
+ * only when the balance is exactly zero: an empty wallet has no currency to
+ * betray, and the demo has communities pricing in EUR, USD, AED and THB.
+ */
+export const wallets = pgTable(
+  "wallets",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    balanceCents: integer("balance_cents").notNull().default(0),
+    currency: text("currency").notNull().default("USD"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("wallets_user_id_idx").on(t.userId),
+    check("wallets_balance_nonneg", sql`${t.balanceCents} >= 0`),
+  ],
+);
+
+export type Wallet = typeof wallets.$inferSelect;
+export type NewWallet = typeof wallets.$inferInsert;
+
+/**
+ * Every movement of the balance, newest first on `/account/wallet`.
+ *
+ * **`wallet_txns_reference_idx` is unique, and that is the replay guard.** A
+ * top-up derives its reference from the one-time nonce on the button
+ * (`purchaseReference()` in `src/auth.ts` — the same mechanism `orders` uses),
+ * so a double tap collides on the index instead of adding the money twice. A
+ * spend files under the order's own reference, which is unique in `orders`, so
+ * one order can debit a balance once; a reversal files under `<reference>-R`.
+ */
+export const walletTxns = pgTable(
+  "wallet_txns",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: WALLET_TXN_KINDS }).notNull(),
+    /** Always positive. `kind` says which way it went. */
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    /** `2CC-8F3K2M`, or `2CC-8F3K2M-R` for the reversal of one. */
+    reference: text("reference").notNull(),
+    /** One line a member can read: "Trio · Cap Ferrat Sailing Society". */
+    note: text("note").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // The history on /account/wallet is "this member's movements, newest first".
+    index("wallet_txns_user_id_idx").on(t.userId),
+    uniqueIndex("wallet_txns_reference_idx").on(t.reference),
+  ],
+);
+
+export type WalletTxn = typeof walletTxns.$inferSelect;
+export type NewWalletTxn = typeof walletTxns.$inferInsert;

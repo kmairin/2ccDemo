@@ -24,6 +24,45 @@ const DOCTYPE = raw("<!doctype html>");
 /** The signed-in member, or `null`/absent when signed out. */
 export type LayoutUser = { name: string } | null;
 
+/* ------------------------------------------------- the two injected slots */
+
+/**
+ * Two things in the header depend on the signed-in member and on nothing the
+ * page knows: the demo balance, and the copy of the account that the owner
+ * asked to be mirrored into `localStorage`.
+ *
+ * Threading either through `Layout` would mean a database read at all
+ * twenty-eight call sites. Instead `Layout` renders an empty, uniquely marked
+ * slot, and one middleware — `walletHeader` in `src/routes/wallet.tsx` — fills
+ * it in on the way out, the same way `src/index.ts` already stamps the theme
+ * onto `<html>`.
+ *
+ * The markers are **exported constants rendered through `raw()`**, so the string
+ * the middleware searches for is character-for-character the string that was
+ * written. A missed match leaves an empty span, which is invisible — the page
+ * still renders, just without the chip.
+ */
+export const HEADER_SLOT = {
+  desktop: '<span class="hdr-balance" data-balance-slot="desktop"></span>',
+  mobile: '<span class="hdr-balance" data-balance-slot="mobile"></span>',
+  panel: '<span data-balance-slot="panel"></span>',
+  /** Sits just before the closing `</body>` script. Replaced by the mirror. */
+  account: '<span data-account-slot=""></span>',
+} as const;
+
+/** The balance chip the middleware writes into the header slots. */
+export function headerBalanceHtml(amount: string, where: "desktop" | "mobile" | "panel"): string {
+  if (where === "panel") {
+    return `<a href="/account/wallet"><span>Balance</span> <span class="num">${amount}</span></a>`;
+  }
+  const cls = where === "mobile" ? "hdr-balance hdr-balance--compact" : "hdr-balance";
+  return (
+    `<a class="${cls}" href="/account/wallet" aria-label="Balance ${amount}">` +
+    `<span class="hdr-balance-label" aria-hidden="true">Balance</span>` +
+    `<span class="num hdr-balance-amount">${amount}</span></a>`
+  );
+}
+
 export type LayoutProps = {
   /** Extra class on <body>, e.g. "page-index" for a tighter vertical rhythm. */
   bodyClass?: string;
@@ -138,6 +177,7 @@ export function Layout(props: LayoutProps) {
                 ))}
                 {signedIn ? (
                   <>
+                    {raw(HEADER_SLOT.desktop)}
                     <a class="nav-link" href="/account" aria-current={active === "account" ? "page" : undefined}>
                       <Avatar name={user.name} />
                       <span style="margin-inline-start:8px">{accountLabel}</span>
@@ -162,9 +202,12 @@ export function Layout(props: LayoutProps) {
                   in to the whole product was invisible. */}
               <div class="nav-mobile-actions">
                 {signedIn ? (
-                  <a class="nav-link" href="/account" aria-label={`Account, ${accountLabel}`}>
-                    <Avatar name={user.name} />
-                  </a>
+                  <>
+                    {raw(HEADER_SLOT.mobile)}
+                    <a class="nav-link" href="/account" aria-label={`Account, ${accountLabel}`}>
+                      <Avatar name={user.name} />
+                    </a>
+                  </>
                 ) : (
                   <a class="btn btn--primary btn--compact" href="/join">
                     Sign in
@@ -184,6 +227,7 @@ export function Layout(props: LayoutProps) {
                       <a href="/account" aria-current={active === "account" ? "page" : undefined}>
                         {accountLabel}
                       </a>
+                      {raw(HEADER_SLOT.panel)}
                       <form method="post" action="/auth/logout" class="nav-signout">
                         <button type="submit" class="nav-link--plain">Sign out</button>
                       </form>
@@ -241,6 +285,7 @@ export function Layout(props: LayoutProps) {
             </div>
           </footer>
 
+          {signedIn ? raw(HEADER_SLOT.account) : null}
           <script dangerouslySetInnerHTML={{ __html: escScript }} />
         </body>
       </html>

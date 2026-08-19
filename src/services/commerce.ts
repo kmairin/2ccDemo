@@ -26,6 +26,7 @@ import {
   memberPackages,
 } from "../schema";
 import { boundLimit, confirmedBookingCount, placesLeft } from "./common";
+import { getWallet, refundStatements, spendStatements } from "./wallet";
 
 /** Commerce writes and logs, so it needs both halves of the environment. */
 export type CommerceEnv = DatabaseEnv & LoggerEnv;
@@ -66,6 +67,9 @@ export interface HostedCommunity {
   name: string;
 }
 
+/** How the member paid. Neither charges anything; both are recorded. */
+export type PaymentMethod = "balance" | "card";
+
 export type PurchaseResult =
   | {
       status: "created";
@@ -77,8 +81,19 @@ export type PurchaseResult =
       currency: string;
       /** True when this purchase also made them an approved member. */
       joinedCommunity: boolean;
+      /** Which of the two ways they paid — the reversal needs to know. */
+      paidWith: PaymentMethod;
     }
   | { status: "already_processed"; orderId: string; reference: string }
+  /** Paying from the balance, and the balance does not cover the price. */
+  | {
+      status: "insufficient_balance";
+      balanceCents: number;
+      amountCents: number;
+      currency: string;
+      /** The wallet's own currency, which may not be the package's. */
+      balanceCurrency: string;
+    }
   | { status: "package_not_found" };
 
 export type BookResult =
@@ -161,7 +176,14 @@ export async function getPackageForCommunity(
  */
 export async function purchase(
   env: CommerceEnv,
-  input: { userId: string; communityId: string; packageId: string; nonce?: string },
+  input: {
+    userId: string;
+    communityId: string;
+    packageId: string;
+    nonce?: string;
+    /** Debit the demo balance instead of the mocked card. Defaults to the card. */
+    payWith?: PaymentMethod;
+  },
 ): Promise<PurchaseResult> {
   const db = getDb(env);
   const log = createLogger(env);
@@ -182,6 +204,25 @@ export async function purchase(
   // needs to be attempted. The unique index below is what makes it correct.
   const replay = await findOrderByReference(env, reference);
   if (replay) return { status: "already_processed", orderId: replay.id, reference };
+
+  const paidWith: PaymentMethod = input.payWith ?? "card";
+
+  // Read the balance before the batch so a short one is a sentence the member
+  // can act on rather than a rolled-back transaction. The CHECK constraint on
+  // `wallets.balance_cents` is what makes the race safe; this is what makes it
+  // civil.
+  if (paidWith === "balance") {
+    const wallet = await getWallet(env, input.userId, offer.currency);
+    if (wallet.currency !== offer.currency || wallet.balanceCents < offer.priceCents) {
+      return {
+        status: "insufficient_balance",
+        balanceCents: wallet.currency === offer.currency ? wallet.balanceCents : 0,
+        amountCents: offer.priceCents,
+        currency: offer.currency,
+        balanceCurrency: wallet.currency,
+      };
+    }
+  }
 
   const orderId = newId();
   const memberPackageId = newId();
@@ -210,6 +251,20 @@ export async function purchase(
       ticketsUsed: 0,
     }),
   ];
+  if (paidWith === "balance") {
+    // In THIS batch, beside the order. A debited balance with no order, or an
+    // order with an undebited balance, is the one outcome that must be
+    // impossible — and it is only impossible while both are one transaction.
+    statements.push(
+      ...spendStatements(env, {
+        userId: input.userId,
+        amountCents: offer.priceCents,
+        currency: offer.currency,
+        reference,
+        note: `${offer.name} · ${offer.tickets} ${offer.tickets === 1 ? "ticket" : "tickets"}`,
+      }),
+    );
+  }
   if (joinCommunity) {
     // "…and the member has none" is enforced by the unique index rather than by
     // a read first: a member who is already in keeps the row they have.
@@ -237,10 +292,27 @@ export async function purchase(
       log.warn("purchase replayed", { reference });
       return { status: "already_processed", orderId: existing.id, reference };
     }
+    // Nothing landed, and the balance was going to pay for it: the likely cause
+    // is `wallets_balance_nonneg` refusing an overspend that raced the read
+    // above. Report it as the refusal it is rather than as a 500 — but only
+    // when the balance really is short, so a genuine fault still propagates.
+    if (paidWith === "balance") {
+      const wallet = await getWallet(env, input.userId, offer.currency);
+      if (wallet.currency !== offer.currency || wallet.balanceCents < offer.priceCents) {
+        log.warn("balance purchase refused", { reference });
+        return {
+          status: "insufficient_balance",
+          balanceCents: wallet.currency === offer.currency ? wallet.balanceCents : 0,
+          amountCents: offer.priceCents,
+          currency: offer.currency,
+          balanceCurrency: wallet.currency,
+        };
+      }
+    }
     throw err;
   }
 
-  log.info("package purchased", { orderId, communityId: input.communityId });
+  log.info("package purchased", { orderId, communityId: input.communityId, paidWith });
   return {
     status: "created",
     orderId,
@@ -250,6 +322,7 @@ export async function purchase(
     amountCents: offer.priceCents,
     currency: offer.currency,
     joinedCommunity: joinCommunity,
+    paidWith,
   };
 }
 
@@ -409,8 +482,17 @@ export type TicketResult =
       currency: string;
       /** True when buying the ticket also made them an approved member. */
       joinedCommunity: boolean;
+      paidWith: PaymentMethod;
     }
   | { status: "already_booked"; code: string }
+  /** Paying from the balance, and the balance does not cover the ticket. */
+  | {
+      status: "insufficient_balance";
+      balanceCents: number;
+      amountCents: number;
+      currency: string;
+      balanceCurrency: string;
+    }
   /** The same form submitted twice. `code` is the place the first submit made. */
   | { status: "already_processed"; reference: string; code: string | null }
   /** The community sells no 1-ticket package, so there is no single ticket to sell. */
@@ -445,7 +527,13 @@ export type TicketResult =
  */
 export async function purchaseTicket(
   env: CommerceEnv,
-  input: { userId: string; eventSlug: string; nonce?: string },
+  input: {
+    userId: string;
+    eventSlug: string;
+    nonce?: string;
+    /** Debit the demo balance instead of the mocked card. Defaults to the card. */
+    payWith?: PaymentMethod;
+  },
 ): Promise<TicketResult> {
   const db = getDb(env);
   const log = createLogger(env);
@@ -500,8 +588,20 @@ export async function purchaseTicket(
     communityId: event.communityId,
     packageId: single.id,
     nonce: input.nonce,
+    payWith: input.payWith,
   });
   if (bought.status === "package_not_found") return { status: "no_single_package" };
+  if (bought.status === "insufficient_balance") {
+    // Nothing was bought and nothing was booked — `purchase()` refuses before
+    // its batch, so there is nothing to compensate here.
+    return {
+      status: "insufficient_balance",
+      balanceCents: bought.balanceCents,
+      amountCents: bought.amountCents,
+      currency: bought.currency,
+      balanceCurrency: bought.balanceCurrency,
+    };
+  }
   if (bought.status === "already_processed") {
     const [made] = await db
       .select({ code: bookings.code })
@@ -527,15 +627,26 @@ export async function purchaseTicket(
       amountCents: bought.amountCents,
       currency: bought.currency,
       joinedCommunity: bought.joinedCommunity,
+      paidWith: bought.paidWith,
     };
   }
 
   // Compensation, not a retry: the ticket exists but the place does not, so the
   // order stops standing. One `batch()` — a refunded order still holding a live
-  // package would be a ticket nobody paid for.
+  // package would be a ticket nobody paid for, and a reversed order that kept
+  // the money would be worse.
   await batch(env, [
     db.update(orders).set({ status: "refunded" }).where(eq(orders.id, bought.orderId)),
     db.delete(memberPackages).where(eq(memberPackages.id, bought.memberPackageId)),
+    ...(bought.paidWith === "balance"
+      ? refundStatements(env, {
+          userId: input.userId,
+          amountCents: bought.amountCents,
+          currency: bought.currency,
+          reference: bought.reference,
+          note: "Reversed — the last place went",
+        })
+      : []),
   ]);
   log.warn("ticket reversed", { orderId: bought.orderId, reason: booked.status });
   return { status: "reversed" };

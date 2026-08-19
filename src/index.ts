@@ -9,6 +9,7 @@ import host from "./routes/host";
 import pages from "./routes/pages";
 import redirects from "./routes/redirects";
 import theme, { themeFromRequest } from "./routes/theme";
+import { walletHeader } from "./routes/wallet";
 import { pageColor } from "./ui/theme";
 
 type Bindings = LoggerEnv &
@@ -74,6 +75,17 @@ app.use("*", async (c, next) => {
     );
   c.res = new Response(html, c.res);
 });
+
+/**
+ * Fill the two member-dependent slots `Layout` leaves in the header: the demo
+ * balance, and the copy of the account mirrored into `localStorage`.
+ *
+ * Here, beside the theme stamp, for the same two reasons: both depend on the
+ * request rather than on the page, and both have to be registered BEFORE the
+ * routers — middleware added after a route handler never runs for that route,
+ * because the handler answers first. See `walletHeader` in src/routes/wallet.tsx.
+ */
+app.use("*", walletHeader);
 
 /**
  * One-time bootstrap for the deployed database. Inert unless ADMIN_TOKEN is set

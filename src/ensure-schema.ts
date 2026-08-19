@@ -88,6 +88,10 @@ const CREATE_STATEMENTS = BOOTSTRAP_STATEMENTS.filter(
  * out by a seed change.
  */
 const TABLES_IN_DROP_ORDER = [
+  // The two wallet tables come first for the same reason `bookings` does: both
+  // hang off `users`, and a table left standing while its parent is recreated
+  // keeps rows pointing at members who no longer exist.
+  "wallet_txns", "wallets",
   "bookings", "passes", "orders", "circle_members", "photos",
   "events", "packages", "circles", "sessions", "users",
 ];

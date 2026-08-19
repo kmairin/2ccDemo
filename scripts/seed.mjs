@@ -1682,6 +1682,12 @@ async function main() {
   try {
     await sql.begin(async (tx) => {
       // Children first: every one of these is a foreign key away from the next.
+      // The two wallet tables have no seeded rows on purpose -- the demo starts
+      // every member on a zero balance, so the top-up is a step you can watch.
+      // They are still cleared, or a reseed would leave money belonging to
+      // users that no longer exist.
+      await tx`delete from wallet_txns`;
+      await tx`delete from wallets`;
       await tx`delete from bookings`;
       await tx`delete from passes`;
       await tx`delete from orders`;
@@ -1715,6 +1721,8 @@ async function main() {
       union all select 'orders', count(*)::int from orders
       union all select 'passes', count(*)::int from passes
       union all select 'bookings', count(*)::int from bookings
+      union all select 'wallets', count(*)::int from wallets
+      union all select 'wallet_txns', count(*)::int from wallet_txns
     `;
 
     console.log("Seeded 2CC:");

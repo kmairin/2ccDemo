@@ -59,13 +59,16 @@ import {
   purchase,
   purchaseTicket,
   type BookingSummary,
+  type PaymentMethod,
 } from "../services/commerce";
+import { getWallet } from "../services/wallet";
 import { listEvents } from "../services/events";
 import { listMembershipsForUser, type MembershipSummary } from "../services/members";
 import { CheckoutSummary, TicketSquares, TicketPlate } from "../ui/booking";
 import { Alert, Badge, Button, EmptyState, Hero, PackageCard, PackageGrid, Section } from "../ui/components";
 import { Layout } from "../ui/layout";
 import profile from "./profile";
+import walletRoutes, { balanceOptionFor, EMPTY_BALANCE } from "./wallet";
 
 const account = new Hono<{ Bindings: AuthEnv }>();
 
@@ -76,6 +79,12 @@ const account = new Hono<{ Bindings: AuthEnv }>();
  * has at the moment it is called, not the ones it grows afterwards.
  */
 account.route("/", profile);
+
+/**
+ * And the demo balance: `/account/wallet` and its top-up. Same reason as
+ * above — mounted at module scope, before `src/index.ts` mounts this router.
+ */
+account.route("/", walletRoutes);
 
 type PageContext = Context<{ Bindings: AuthEnv }>;
 
@@ -199,6 +208,17 @@ const NOWRAP = "white-space:nowrap";
  */
 function wide(rem: number): string {
   return `min-width:${rem}rem`;
+}
+
+/**
+ * Which of the two ways to pay a form asked for.
+ *
+ * A missing or unrecognised value is the card, which is what every form posted
+ * before there was a balance to spend — so nothing that worked before this
+ * change behaves differently.
+ */
+function paymentMethod(raw: unknown): PaymentMethod {
+  return raw === "balance" ? "balance" : "card";
 }
 
 /** `3 events · €120 each` — the derivation §6 asks every price to show. */
@@ -568,6 +588,8 @@ function BookingTable(props: { rows: BookingSummary[]; now: Date; showStatus?: b
 
 type AccountPageProps = {
   user: { name: string; email: string };
+  /** "€500" — already formatted, so this page and the wallet agree. */
+  balance: string;
   flash: Flash | null;
   held: HeldPackage[];
   booked: BookingSummary[];
@@ -578,7 +600,7 @@ type AccountPageProps = {
 };
 
 function AccountPage(props: AccountPageProps) {
-  const { user, flash, held, booked, memberships, pending, nextByCommunity, now } = props;
+  const { user, balance, flash, held, booked, memberships, pending, nextByCommunity, now } = props;
 
   const groups = ticketsByCommunity(held, booked);
   const upcoming = booked.filter(
@@ -609,6 +631,9 @@ function AccountPage(props: AccountPageProps) {
             profile, which is what this link opens. */}
         <Button href="/account/profile" variant="quiet">
           Your profile
+        </Button>
+        <Button href="/account/wallet" variant="quiet">
+          Your balance — <span class="num">{balance}</span>
         </Button>
       </Hero>
 
@@ -798,19 +823,21 @@ account.get("/account", async (c) => {
   if (me instanceof Response) return me;
 
   const now = new Date();
-  const [flash, held, booked, memberships, pending, nextByCommunity] = await Promise.all([
+  const [flash, held, booked, memberships, pending, nextByCommunity, wallet] = await Promise.all([
     takeFlash(c.env, me.session),
     listHeldPackages(c.env, me.user.id),
     listBookingsForUser(c.env, me.user.id, { limit: ROW_LIMIT }),
     listMembershipsForUser(c.env, me.user.id, { limit: ROW_LIMIT }),
     listPendingRequests(c.env, me.user.id),
     nextEventByCommunity(c.env, me.user.id, now),
+    getWallet(c.env, me.user.id),
   ]);
 
   pageHeaders(c);
   return c.html(
     <AccountPage
       user={{ name: me.user.name, email: me.user.email }}
+      balance={wallet.exists ? formatMoney(wallet.balanceCents, wallet.currency) : EMPTY_BALANCE}
       flash={flash}
       held={held}
       booked={booked}
@@ -945,7 +972,14 @@ account.get("/communities/:slug/packages/:packageId/checkout", async (c) => {
 
   const next = safeNext(c.req.query("next"));
   const price = formatMoney(offer.priceCents, offer.currency);
-  const flash = await takeFlash(c.env, me.session);
+  const here = `/communities/${found.community.slug}/packages/${offer.id}/checkout${
+    next === undefined ? "" : `?next=${encodeURIComponent(next)}`
+  }`;
+  const [flash, balance] = await Promise.all([
+    takeFlash(c.env, me.session),
+    // Topping up comes back to this checkout, so the second click is the buy.
+    balanceOptionFor(c.env, me.user.id, { amountCents: offer.priceCents, currency: offer.currency }, here),
+  ]);
 
   pageHeaders(c);
   return c.html(
@@ -960,7 +994,7 @@ account.get("/communities/:slug/packages/:packageId/checkout", async (c) => {
         index="01"
         label="Checkout"
         title="One step, then it is yours"
-        lede={`${offer.name} for ${found.community.name}. No card is charged — the demo records the order and issues the tickets.`}
+        lede={`${offer.name} for ${found.community.name}. Pay from your balance or by card — neither charges anything, and both record the order and issue the tickets.`}
       />
 
       <Section index="02" label="Order" title={`${offer.name} · ${price}`}>
@@ -974,6 +1008,7 @@ account.get("/communities/:slug/packages/:packageId/checkout", async (c) => {
             action={`/communities/${found.community.slug}/packages/${offer.id}/buy`}
             nonce={issuePurchaseNonce()}
             next={next}
+            balance={balance}
           />
           <p class="action-help" style="margin-block-start:24px">
             {found.community.isPrivate
@@ -998,19 +1033,39 @@ account.post("/communities/:slug/packages/:packageId/buy", async (c) => {
   const body = await c.req.parseBody();
   const next = safeNext(typeof body.next === "string" ? body.next : undefined);
   const nonce = typeof body.nonce === "string" && body.nonce !== "" ? body.nonce : undefined;
+  const payWith = paymentMethod(body.pay);
 
-  // `purchase` writes the order, the package and — on an open community — the
-  // approved membership in ONE batch, and spends the nonce into
-  // `orders.reference`, so a double submit collides on the unique index rather
-  // than buying twice.
+  // `purchase` writes the order, the package, — on an open community — the
+  // approved membership, and, when the balance is paying, the debit and its
+  // ledger line, in ONE batch. It spends the nonce into `orders.reference`, so
+  // a double submit collides on the unique index rather than buying twice.
   const result = await purchase(c.env, {
     userId: me.user.id,
     communityId: found.community.id,
     packageId: c.req.param("packageId"),
     nonce,
+    payWith,
   });
 
   if (result.status === "package_not_found") return c.json({ error: "Package not found" }, 404);
+
+  if (result.status === "insufficient_balance") {
+    // Back to the checkout, where the top-up link sits under the refusal.
+    const back = `/communities/${found.community.slug}/packages/${c.req.param("packageId")}/checkout${
+      next === undefined ? "" : `?next=${encodeURIComponent(next)}`
+    }`;
+    return redirectWith(
+      c,
+      me.session,
+      flashMessage(
+        "warn",
+        result.balanceCurrency !== result.currency
+          ? `Your balance is held in ${result.balanceCurrency} and this package is priced in ${result.currency}. Nothing was bought.`
+          : `Your balance is ${formatMoney(result.balanceCents, result.currency)}, which is ${formatMoney(result.amountCents - result.balanceCents, result.currency)} short. Nothing was bought.`,
+      ),
+      back,
+    );
+  }
 
   if (result.status === "already_processed") {
     return redirectWith(
@@ -1022,10 +1077,11 @@ account.post("/communities/:slug/packages/:packageId/buy", async (c) => {
   }
 
   const joined = result.joinedCommunity ? ` You are in ${found.community.name}.` : "";
+  const how = result.paidWith === "balance" ? " from your balance" : "";
   return redirectWith(
     c,
     me.session,
-    `${result.tickets} ${result.tickets === 1 ? "ticket" : "tickets"} for ${found.community.name}. Order ${result.reference}, ${formatMoney(result.amountCents, result.currency)}.${joined}`,
+    `${result.tickets} ${result.tickets === 1 ? "ticket" : "tickets"} for ${found.community.name}. Order ${result.reference}, ${formatMoney(result.amountCents, result.currency)}${how}.${joined}`,
     next ?? "/account",
   );
 });
@@ -1135,16 +1191,35 @@ account.post("/events/:slug/ticket", async (c) => {
   const back = `/events/${slug}`;
   const body = await c.req.parseBody();
   const nonce = typeof body.nonce === "string" && body.nonce !== "" ? body.nonce : undefined;
+  const payWith = paymentMethod(body.pay);
 
-  const result = await purchaseTicket(c.env, { userId: me.user.id, eventSlug: slug, nonce });
+  const result = await purchaseTicket(c.env, {
+    userId: me.user.id,
+    eventSlug: slug,
+    nonce,
+    payWith,
+  });
 
   switch (result.status) {
     case "ticketed":
       return redirectWith(
         c,
         me.session,
-        `You're going. Ticket ${result.code}, ${formatMoney(result.amountCents, result.currency)}, order ${result.reference}.`,
+        `You're going. Ticket ${result.code}, ${formatMoney(result.amountCents, result.currency)}${result.paidWith === "balance" ? " from your balance" : ""}, order ${result.reference}.`,
         `/account/tickets/${result.code}`,
+      );
+
+    case "insufficient_balance":
+      return redirectWith(
+        c,
+        me.session,
+        flashMessage(
+          "warn",
+          result.balanceCurrency !== result.currency
+            ? `Your balance is held in ${result.balanceCurrency} and this ticket is priced in ${result.currency}. Nothing was bought.`
+            : `Your balance is ${formatMoney(result.balanceCents, result.currency)}, which is ${formatMoney(result.amountCents - result.balanceCents, result.currency)} short of this ticket. Nothing was bought — top up on your balance page.`,
+        ),
+        back,
       );
 
     case "already_booked":

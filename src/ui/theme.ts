@@ -189,7 +189,12 @@ export const fontsHref =
 export const escScript =
   "addEventListener('keydown',function(e){if(e.key!=='Escape')return;" +
   "var d=document.querySelector('details.nav-mobile[open]');" +
-  "if(!d)return;d.open=false;var s=d.querySelector('summary');if(s)s.focus();});";
+  "if(!d)return;d.open=false;var s=d.querySelector('summary');if(s)s.focus();});" +
+  // The other half of the localStorage mirror the owner asked for. The copy is
+  // written by the middleware in src/routes/wallet.tsx on every signed-in page,
+  // and a signed-out page is the only place that can know to throw it away --
+  // the header renders no balance chip when nobody is signed in.
+  "try{if(!document.querySelector('.hdr-balance'))localStorage.removeItem('2cc.account')}catch(e){}";
 
 export const css = `
 :root {${palette(light)}
@@ -1131,4 +1136,61 @@ fieldset[disabled] input { color:var(--ink-3); border-block-end-style:dashed; }
    flow; the fixed bar is a shortcut to it, not a replacement for it. */
 .action-sidebar { display:block; margin-block-start:var(--s6); }
 @media (min-width:900px) { .action-sidebar { margin-block-start:0; } }
+
+/* ---------- the balance in the header ---------- */
+
+/* Drawn as a nav link is: micro-caps label, the figure in the machine face and
+   the accent, one hairline underline on hover. Never a pill and never a fill
+   (section 7) -- it is a number in a header, not a badge. Written into an empty
+   slot by the middleware in src/routes/wallet.tsx, because the balance depends
+   on the member and Layout is called from twenty-eight places. */
+.hdr-balance {
+  display:inline-flex; align-items:center; gap:8px; min-height:44px;
+  font-size:var(--t-meta); color:var(--ink-3);
+  border-block-end:1px solid transparent; white-space:nowrap;
+}
+.hdr-balance:hover { color:var(--ink); border-block-end-color:var(--accent); }
+.hdr-balance-label { text-transform:uppercase; letter-spacing:.18em; font-size:var(--t-micro); color:var(--ink-faint); }
+.hdr-balance-amount { color:var(--accent); }
+/* At 375 the header carries a wordmark, this, an avatar and Menu. The label is
+   the part that can go: the figure alone is unambiguous next to an account. */
+.hdr-balance--compact .hdr-balance-label { display:none; }
+.hdr-balance--compact { gap:0; }
+.nav-panel .hdr-balance { display:flex; }
+
+/* ---------- topping up ---------- */
+
+/* Four submit buttons in one form -- one click and the balance moves, which is
+   what "no card" has to mean. The recommended one is the primary; the rest are
+   ghosts, so there is still one primary per screen (section 2). */
+.topup-amounts { display:flex; flex-wrap:wrap; gap:var(--s3); }
+.topup-amounts .btn { flex:0 1 auto; }
+
+/* The balance half of the checkout, above the card block. Same hairline box as
+   the card fieldset so the two ways to pay read as siblings. */
+.pay { border:1px solid var(--line); border-radius:2px; padding:var(--s4); background:var(--card); display:grid; gap:var(--s3); }
+.pay .btn { justify-self:start; }
+
+/* ---------- join: the two ways in ---------- */
+
+/* A hairline with one word on it, between the Google button and the form. */
+.or-rule { display:flex; align-items:center; gap:var(--s4); color:var(--ink-faint); font-size:var(--t-micro); text-transform:uppercase; letter-spacing:.18em; }
+.or-rule::before,.or-rule::after { content:""; flex:1 1 auto; height:1px; background:var(--line); }
+
+/* The demo account chooser. Shared hairlines and opaque rows, like the country
+   index -- a printed list, not a stack of cards. */
+.chooser { display:grid; gap:1px; }
+.chooser > * { min-width:0; box-shadow:0 0 0 1px var(--line); }
+.chooser-row {
+  display:grid; gap:var(--s3); align-items:center; margin:0;
+  padding:var(--s4); background:var(--card);
+}
+.chooser-row:hover { background:var(--paper-2); }
+.chooser-who { display:grid; gap:var(--s1); min-width:0; }
+.chooser-name { font-family:var(--display); font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144; font-size:var(--t-card); color:var(--ink); }
+.chooser-row .btn { justify-self:start; }
+@media (min-width:560px) {
+  .chooser-row { grid-template-columns:minmax(0,1fr) auto; }
+  .chooser-row .btn { justify-self:end; }
+}
 `;

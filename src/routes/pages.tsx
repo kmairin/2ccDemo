@@ -22,6 +22,7 @@
  *     section's `<h2>` (§10.4).
  */
 
+import { inArray } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import type { Child } from "hono/jsx";
 import {
@@ -43,6 +44,7 @@ import { newId } from "../lib/ids";
 import {
   COMMUNITY_CATEGORIES,
   communityMembers,
+  users,
   type CommunityCategory,
   type MembershipStatus,
 } from "../schema";
@@ -79,6 +81,7 @@ import {
   type EventSummary,
 } from "../services/events";
 import { getMembership, listApprovedMembers, listEventAttendees } from "../services/members";
+import { balanceOptionFor } from "./wallet";
 import { ActionArea, ActionBar, PackageTable, type ActionState, type PackageChoice } from "../ui/booking";
 import { CalendarMonth, Ledger, type CalendarDay, type LedgerGroup } from "../ui/calendar";
 import {
@@ -1117,6 +1120,24 @@ pages.get("/events/:slug", async (c) => {
       getCommunityBySlug(c.env, community.slug),
     ]);
 
+  /**
+   * The single ticket on this page can be paid from the demo balance as well as
+   * by the mocked card, so the action area needs to know what the member holds
+   * and what the ticket costs. Only the 1-ticket package can be bought in one
+   * step, so that is the price this is measured against; without one there is
+   * nothing to offer and no read to make.
+   */
+  const single = packages.find((offer) => offer.tickets === 1);
+  const balance =
+    me === null || single === undefined
+      ? undefined
+      : await balanceOptionFor(
+          c.env,
+          me.user.id,
+          { amountCents: single.priceCents, currency: single.currency },
+          `/events/${event.slug}`,
+        );
+
   const start = new Date(event.startsAt);
   const end = new Date(event.endsAt);
   const hostFirst = firstName(communityRow?.host.name ?? "");
@@ -1233,6 +1254,8 @@ pages.get("/events/:slug", async (c) => {
                 placesLeft={event.placesLeft}
                 capacity={event.capacity}
                 state={state}
+                eventSlug={event.slug}
+                balance={balance}
               />
             </div>
           </div>
@@ -2133,7 +2156,27 @@ function JoinPage(props: { form: JoinForm; user: LayoutUser; flash: Flash | null
             </p>
             <h1 class="h-page">Join</h1>
             <p class="invitation" style="margin-block-start:var(--s5)">
-              Anyone can join. Two fields, and you are in.
+              Anyone can join. One click with Google, or two fields.
+            </p>
+
+            {/* One click, and it never touches a real Google account. See
+                `GoogleChooserPage` below for what it actually opens. */}
+            <div style="margin-block-start:var(--s6)">
+              <Button
+                href={`/join/google${form.next === undefined ? "" : `?next=${encodeURIComponent(form.next)}`}`}
+                variant="primary"
+                block={true}
+              >
+                <ProviderMark /> Continue with Google
+              </Button>
+              <p class="field-hint" style="margin-block-start:var(--s3)">
+                A demo sign-in. It opens a list of made-up accounts — no real Google account is
+                involved, and there is no password to type.
+              </p>
+            </div>
+
+            <p class="or-rule" style="margin-block-start:var(--s6)">
+              <span>or</span>
             </p>
 
             <form
@@ -2213,6 +2256,190 @@ function JoinPage(props: { form: JoinForm; user: LayoutUser; flash: Flash | null
   );
 }
 
+/**
+ * The mark on the sign-in button.
+ *
+ * Drawn here, in one path, on purpose. **Google's own mark is not used and must
+ * not be** — a screen that borrows the four-colour G is a screen that claims to
+ * be Google, and this one is a demo chooser with made-up accounts. A neutral
+ * hairline reticle says "an account somewhere else" without pretending to be
+ * anybody. 16px, 1px stroke, `currentColor` (§7).
+ */
+function ProviderMark() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      style="vertical-align:-2px;margin-inline-end:8px"
+    >
+      <g fill="none" stroke="currentColor" stroke-width="1">
+        <circle cx="8" cy="8" r="6.5" />
+        <path d="M1.5 8h13" />
+        <path d="M8 1.5c3 2.6 3 9.4 0 13-3-3.6-3-10.4 0-13Z" />
+      </g>
+    </svg>
+  );
+}
+
+/* ------------------------------------------------- the demo account chooser */
+
+/** One row on the chooser: who they are, and what signing in as them gives you. */
+type DemoAccount = { email: string; name: string; note: string };
+
+/**
+ * The two accounts the seed guarantees (`scripts/seed.mjs` asserts both exist),
+ * with the names they are seeded under as a fallback for a database that has
+ * not been seeded yet.
+ */
+const DEMO_ACCOUNTS: readonly DemoAccount[] = [
+  { email: "member@2cc.club", name: "Alexandra Voss", note: "A member. Holds packages and tickets." },
+  { email: "host@2cc.club", name: "Rafael Ortiz", note: "A host. Runs two communities as well." },
+];
+
+/**
+ * The demo account chooser.
+ *
+ * **This screen never collects a credential and must never be made to.** There
+ * is no password field, no email field, and nothing styled to look like
+ * Google's own sign-in — the whole page is a list of obviously-fake accounts
+ * with the word Demo on it, and every row is a plain submit button. Picking one
+ * signs you in as that member, exactly as `POST /auth/login` already does with
+ * an email and a name, because this product has no passwords at all (spec,
+ * non-goals).
+ *
+ * The server session is still what authorises anything. Bookings, tickets and
+ * the balance are keyed to a user row, and the server cannot read
+ * `localStorage`, so one click creates or reuses the real member and their
+ * session cookie. The copy in `localStorage` is written on top of that, by the
+ * middleware in `src/routes/wallet.tsx`.
+ */
+function GoogleChooserPage(props: {
+  accounts: DemoAccount[];
+  guest: DemoAccount;
+  next?: string;
+  user: LayoutUser;
+  flash: Flash | null;
+}) {
+  const { accounts, guest, next, user, flash } = props;
+
+  const row = (account: DemoAccount, label: string) => (
+    <form method="post" action="/auth/google" class="chooser-row">
+      <input type="hidden" name="email" value={account.email} />
+      <input type="hidden" name="name" value={account.name} />
+      {next !== undefined ? <input type="hidden" name="next" value={next} /> : null}
+      <span class="chooser-who">
+        <span class="chooser-name">{account.name}</span>
+        <span class="meta num">{account.email}</span>
+        <span class="meta">{account.note}</span>
+      </span>
+      {/* The visible label is a whole word; the name it continues as is on the
+          accessible name, where a screen reader reads it with the row. */}
+      <Button type="submit" variant="ghost" ariaLabel={`${label} ${account.name}`}>
+        Continue
+      </Button>
+    </form>
+  );
+
+  return (
+    <Layout
+      title={pageTitle("Choose a demo account", flash)}
+      description="Pick one of the demo accounts. No password, and no real Google account."
+      user={user}
+    >
+      <FlashBanner flash={flash} />
+
+      <section class="section">
+        <Container>
+          <div class="column-420">
+            <p class="index">
+              <span class="index-rule" aria-hidden="true" />
+              <span class="index-num">01</span>
+              <span class="index-sep" aria-hidden="true">
+                /
+              </span>
+              <span class="index-label">Demo sign-in</span>
+            </p>
+            <h1 class="h-page">Choose an account</h1>
+            <p class="status status--warn" style="margin-block-start:var(--s4)">
+              Demo — these accounts are made up
+            </p>
+            <p class="lede" style="margin-block-start:var(--s5)">
+              No Google account is involved, nothing is asked for and nothing is checked. Picking a
+              name signs you straight in as that member.
+            </p>
+
+            <div class="chooser" style="margin-block-start:var(--s7)" data-chooser="">
+              {accounts.map((account) => row(account, "Continue as"))}
+              {row(guest, "Continue as")}
+            </div>
+
+            {/* `.action-help` rather than `.meta`: it is the one that gives an
+                inline link a hairline, and a link nobody can see is not a link. */}
+            <p class="action-help" style="margin-block-start:var(--s6)">
+              Rather type an email?{" "}
+              <a href={`/join${next === undefined ? "" : `?next=${encodeURIComponent(next)}`}`}>
+                Back to Join
+              </a>
+              .
+            </p>
+          </div>
+        </Container>
+      </section>
+    </Layout>
+  );
+}
+
+/**
+ * "Use a different account", as an account.
+ *
+ * Generated per render so the button needs no typing and still lands on a
+ * member of its own. The domain is not a real one, which is the point — this is
+ * a demo identity, and it should read as one wherever it turns up.
+ */
+function guestAccount(): DemoAccount {
+  const tag = newId().slice(0, 4).toUpperCase();
+  return {
+    email: `guest.${tag.toLowerCase()}@demo.2cc.club`,
+    name: `Guest ${tag}`,
+    note: "Use a different account. A new member, made on the spot.",
+  };
+}
+
+pages.get("/join/google", async (c) => {
+  const me = await currentUser(c);
+  const flash = await readFlash(c, me);
+  const next = safeNext(c.req.query("next"));
+
+  // The seeded names, read back so the chooser cannot drift from the database.
+  // A database that has not been seeded falls back to the constants, and
+  // `signIn` creates the member on the first click.
+  const db = getDb(c.env);
+  const known = await db
+    .select({ email: users.email, name: users.name })
+    .from(users)
+    .where(inArray(users.email, DEMO_ACCOUNTS.map((account) => account.email)))
+    .limit(DEMO_ACCOUNTS.length);
+  const byEmail = new Map(known.map((row) => [row.email, row.name]));
+  const accounts = DEMO_ACCOUNTS.map((account) => ({
+    ...account,
+    name: byEmail.get(account.email) ?? account.name,
+  }));
+
+  pageHeaders(c);
+  return c.html(
+    <GoogleChooserPage
+      accounts={accounts}
+      guest={guestAccount()}
+      next={next}
+      user={layoutUser(me)}
+      flash={flash}
+    />,
+  );
+});
+
 pages.get("/join", async (c) => {
   const me = await currentUser(c);
   const flash = await readFlash(c, me);
@@ -2261,6 +2488,29 @@ pages.post("/auth/login", async (c) => {
       <JoinPage form={{ email, name, code, next, errors }} user={layoutUser(me)} flash={null} />,
       400,
     );
+  }
+
+  const session = await signIn(c.env, email, name);
+  setSessionCookie(c, session);
+  return c.redirect(next ?? "/account", 302);
+});
+
+/**
+ * Sign in as one of the demo accounts — the whole of the "Sign in with Google"
+ * flow, and deliberately no more than `POST /auth/login` already does.
+ *
+ * No credential is accepted here because none exists: this product has no
+ * passwords (spec, non-goals), and `/auth/login` has always signed a member in
+ * from an email and a name alone. This route is that, with the typing removed.
+ */
+pages.post("/auth/google", async (c) => {
+  const body = await c.req.parseBody();
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const next = safeNext(typeof body.next === "string" ? body.next : undefined);
+
+  if (!EMAIL_RE.test(email) || name === "") {
+    return c.json({ error: "A demo account needs an email and a name" }, 400);
   }
 
   const session = await signIn(c.env, email, name);

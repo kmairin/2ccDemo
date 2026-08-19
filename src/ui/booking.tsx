@@ -33,6 +33,26 @@ export type PackageChoice = {
   cta?: string;
 };
 
+/**
+ * The demo balance, as the two buying surfaces see it.
+ *
+ * Formatted, decided and pre-computed by the route — this file does no money
+ * arithmetic and no formatting, so the checkout, the ticket button and
+ * `/account/wallet` can never disagree about what a member holds.
+ */
+export type BalanceOption = {
+  /** "€500" — what they hold. */
+  label: string;
+  /** True when it covers this price. The only thing that enables the button. */
+  covers: boolean;
+  /** "€360" — what is missing. Meaningless when `covers`. */
+  shortLabel: string;
+  /** `/account/wallet?need=…&currency=…&next=…` — the amount already chosen. */
+  topUpHref: string;
+  /** True when the balance is held in another currency, so it cannot pay here at all. */
+  otherCurrency: boolean;
+};
+
 /* ---------- the three packages, as one bordered table (§5) ---------- */
 
 /**
@@ -114,6 +134,11 @@ export type ActionAreaProps = {
    * render, which is what makes a double tap collide instead of buying twice.
    */
   ticketNonce?: string;
+  /**
+   * The demo balance, when this member has one. Absent, the single ticket is
+   * card-only, exactly as it was before there was a balance to spend.
+   */
+  balance?: BalanceOption;
 };
 
 function PackageButtons(props: { heading: string; packages: PackageChoice[] }) {
@@ -167,19 +192,38 @@ function eventSlugFrom(packages: PackageChoice[], explicit?: string): string | n
  * server spends it into the order reference, so submitting the same rendered
  * form twice collides on the unique index instead of buying a second ticket.
  */
-function TicketButton(props: { action: string; price: string; nonce?: string }) {
+function TicketButton(props: {
+  action: string;
+  price: string;
+  nonce?: string;
+  balance?: BalanceOption;
+}) {
+  const fromBalance = props.balance !== undefined && props.balance.covers;
   return (
     <form method="post" action={props.action}>
       <input type="hidden" name="nonce" value={props.nonce ?? crypto.randomUUID()} />
-      <Button type="submit" variant="primary" block={true}>
-        Buy a ticket — {props.price}
-      </Button>
+      {/* `pay` is always sent, so the server never has to guess which of the two
+          ways was clicked. Absent, it defaults to the card. */}
+      {fromBalance ? (
+        <div class="action-packages">
+          <Button type="submit" name="pay" value="balance" variant="primary" block={true}>
+            Pay from balance — {props.price}
+          </Button>
+          <Button type="submit" name="pay" value="card" variant="ghost" block={true}>
+            Pay by card — {props.price}
+          </Button>
+        </div>
+      ) : (
+        <Button type="submit" name="pay" value="card" variant="primary" block={true}>
+          Buy a ticket — {props.price}
+        </Button>
+      )}
     </form>
   );
 }
 
 export function ActionArea(props: ActionAreaProps) {
-  const { community, placesLeft, capacity, ticketCost = 1, state, eventSlug, ticketNonce } = props;
+  const { community, placesLeft, capacity, ticketCost = 1, state, eventSlug, ticketNonce, balance } = props;
 
   // A member with no tickets is offered the single ticket first and the packages
   // underneath as the cheaper-per-event option. Both halves have to be
@@ -239,8 +283,24 @@ export function ActionArea(props: ActionAreaProps) {
       {state.kind === "no-tickets" ? (
         ticketAction !== null && single !== undefined ? (
           <>
-            <TicketButton action={ticketAction} price={single.price} nonce={ticketNonce} />
-            <p class="action-help">One place at this event. No card is charged.</p>
+            <TicketButton
+              action={ticketAction}
+              price={single.price}
+              nonce={ticketNonce}
+              balance={balance}
+            />
+            <p class="action-help">
+              One place at this event. No card is charged.
+              {balance === undefined ? null : balance.covers ? (
+                <> Balance {balance.label}.</>
+              ) : (
+                <>
+                  {" "}
+                  Balance {balance.label} —{" "}
+                  <a href={balance.topUpHref}>top up {balance.shortLabel}</a>.
+                </>
+              )}
+            </p>
             <div style="margin-block-start:24px">
               <PackageButtons
                 heading="or save with 3 or 6"
@@ -328,9 +388,9 @@ function Seal() {
   return (
     <svg class="ticket-seal" viewBox="0 0 72 72" aria-hidden="true" focusable="false">
       <g fill="none" stroke="currentColor" stroke-width="1">
-        <community cx="36" cy="36" r="34" />
-        <community cx="36" cy="36" r="30.5" stroke-dasharray="1.4 6.6" />
-        <community cx="36" cy="36" r="25" />
+        <circle cx="36" cy="36" r="34" />
+        <circle cx="36" cy="36" r="30.5" stroke-dasharray="1.4 6.6" />
+        <circle cx="36" cy="36" r="25" />
       </g>
       <text
         x="36"
@@ -425,10 +485,17 @@ export type CheckoutSummaryProps = {
   next?: string;
   /** Demo only. Never a real card, and never an enabled card input. */
   cardLast4?: string;
+  /**
+   * The demo balance. Present, the checkout offers two ways to pay; absent, it
+   * is the card block on its own, exactly as it was.
+   */
+  balance?: BalanceOption;
 };
 
 export function CheckoutSummary(props: CheckoutSummaryProps) {
-  const { communityName, packageName, tickets, price, perEvent, action, nonce, next, cardLast4 } = props;
+  const { communityName, packageName, tickets, price, perEvent, action, nonce, next, cardLast4, balance } =
+    props;
+  const fromBalance = balance !== undefined && balance.covers;
   return (
     <form class="checkout" method="post" action={action}>
       <input type="hidden" name="nonce" value={nonce} />
@@ -457,15 +524,40 @@ export function CheckoutSummary(props: CheckoutSummaryProps) {
         </div>
       </dl>
 
+      {/* Two ways to pay, and the same form posts both — `pay` says which. The
+          server treats a missing `pay` as the card, so nothing that submitted
+          this form before the balance existed changes behaviour. */}
+      {balance !== undefined ? (
+        <div class="pay">
+          <p class="micro">Pay from balance</p>
+          <p class="meta">
+            {balance.otherCurrency
+              ? `Your balance is ${balance.label}, and a balance holds one currency. This package is priced in another.`
+              : balance.covers
+                ? `Balance ${balance.label}. Nothing is charged — the balance is part of the demo.`
+                : `Balance ${balance.label}, which is ${balance.shortLabel} short of this package.`}
+          </p>
+          {balance.covers ? (
+            <Button type="submit" name="pay" value="balance" variant="primary">
+              Pay from balance — {price}
+            </Button>
+          ) : (
+            <Button href={balance.topUpHref} variant="ghost">
+              {balance.otherCurrency ? "Go to your balance" : `Top up ${balance.shortLabel}`}
+            </Button>
+          )}
+        </div>
+      ) : null}
+
       {/* Disabled on purpose: this demo records an order and never charges a
           card. There is deliberately no enabled card input anywhere. */}
       <fieldset class="checkout-card" disabled>
-        <legend class="micro">Payment</legend>
+        <legend class="micro">Pay by card</legend>
         <p class="card-digits">•••• •••• •••• {cardLast4 ?? "4242"}</p>
         <p class="checkout-demo">DEMO — no card is charged</p>
       </fieldset>
 
-      <Button type="submit" variant="primary">
+      <Button type="submit" name="pay" value="card" variant={fromBalance ? "ghost" : "primary"}>
         Confirm — {price}
       </Button>
     </form>
