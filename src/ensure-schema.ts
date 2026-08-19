@@ -256,6 +256,35 @@ function firstText(rows: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
 }
 
+/**
+ * Is the data actually there, rather than merely claimed to be?
+ *
+ * `seed_version` is written when a load finishes, but a load can finish having
+ * inserted nothing — and once that string matches, every later request returns
+ * early and the database is never repaired. Deployed, that is exactly what
+ * happened: the version said current while `events` held zero rows, so the site
+ * served an empty calendar and an empty ledger indefinitely with nothing in any
+ * report to explain it.
+ *
+ * So the fast path costs one more count. If the bundle carries events and the
+ * database has none, the world is not loaded, whatever the marker says.
+ */
+const BUNDLE_HAS_EVENTS = DATA_STATEMENTS.some((s) =>
+  /^INSERT INTO "public"\."events"/i.test(s),
+);
+
+async function worldLooksLoaded(env: EnsureEnv): Promise<boolean> {
+  if (!BUNDLE_HAS_EVENTS) return true;
+  try {
+    const db = getDb(env);
+    return scalar(await db.execute(sql`select count(*)::int from events`)) > 0;
+  } catch {
+    // Cannot ask — treat as loaded so an unreachable database does not trigger
+    // a rebuild. A blip must never become a destructive rebuild.
+    return true;
+  }
+}
+
 /** First scalar of the first row. The data-service proxy returns positional arrays. */
 function scalar(rows: unknown): number {
   return Number(firstText(rows) ?? 0);
@@ -507,7 +536,7 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
   }
 
   bootstrapReport.storedVersion = storedVersion;
-  if (storedVersion === BOOTSTRAP_VERSION) return true;
+  if (storedVersion === BOOTSTRAP_VERSION && (await worldLooksLoaded(env))) return true;
 
   // Somebody else is already rebuilding. Serve the page instead of queueing up
   // behind them — that queue is what turned one slow build into a dead site.
