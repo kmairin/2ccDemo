@@ -52,7 +52,7 @@ export interface Logger {
  *   log.debug("cart", { items: cart.length });  // silent in production
  *   log.error("checkout failed", { orderId });  // always emitted
  *
- * Never pass secrets, tokens or whole request bodies as context — log an id.
+ * Never package secrets, tokens or whole request bodies as context — log an id.
  */
 export function createLogger(env?: LoggerEnv): Logger {
   const level = resolveLevel(env);

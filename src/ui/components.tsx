@@ -30,7 +30,7 @@ export type PlateProps = {
   category?: string;
   /** The monogram deboss — the plate's subject, so it never reads as a missing image. */
   monogram?: string;
-  /** Gatherings get a chart rule instead of a monogram (§1). */
+  /** Events get a chart rule instead of a monogram (§1). */
   rule?: boolean;
   shape?: "card" | "square" | "hero" | "bare";
   density?: PlateDensity;
@@ -38,8 +38,8 @@ export type PlateProps = {
   engraving?: boolean;
   /**
    * An R2 key. When it is set the component renders `<img src="/assets/…">`
-   * from the bucket, and that is now the normal case — every circle and every
-   * gathering has a photograph. The generated plate below is the fallback for
+   * from the bucket, and that is now the normal case — every community and every
+   * event has a photograph. The generated plate below is the fallback for
    * a record that does not.
    */
   objectKey?: string | null;
@@ -99,7 +99,7 @@ export function Container(props: { children?: Child }) {
 
 /**
  * Gesture 1 of 2: the rule-and-index. A 24px brass hairline, a mono numeral
- * and a micro-caps label — `— 03 / GATHERINGS`. It opens every section on
+ * and a micro-caps label — `— 03 / EVENTS`. It opens every section on
  * every screen, and it is half of what carries the brand (§3).
  */
 export function SectionIndex(props: { index: string | number; label: string }) {
@@ -205,7 +205,7 @@ export function Divider() {
 
 /* ---------- cards ---------- */
 
-export type CircleCardProps = {
+export type CommunityCardProps = {
   slug: string;
   name: string;
   tagline: string;
@@ -218,7 +218,7 @@ export type CircleCardProps = {
   coverKey?: string | null;
 };
 
-export function CircleCard(props: CircleCardProps) {
+export function CommunityCard(props: CommunityCardProps) {
   const { slug, name, tagline, city, category, memberCount, isPrivate, coverKey } = props;
   return (
     <article class="card">
@@ -226,7 +226,7 @@ export function CircleCard(props: CircleCardProps) {
       <div class="card-body">
         <span class="micro micro--brass">{category}</span>
         <h3 class="h-card card-title">
-          <a href={`/circles/${slug}`}>{name}</a>
+          <a href={`/communities/${slug}`}>{name}</a>
         </h3>
         <p class="card-text">{tagline}</p>
         <div class="card-foot">
@@ -242,7 +242,7 @@ export function CircleCard(props: CircleCardProps) {
 export type EventCardProps = {
   slug: string;
   title: string;
-  circleName: string;
+  communityName: string;
   city: string;
   venue: string;
   /** Already formatted — this component never touches dates. */
@@ -254,7 +254,7 @@ export type EventCardProps = {
 };
 
 export function EventCard(props: EventCardProps) {
-  const { slug, title, circleName, city, venue, when, placesLeft, category, coverKey } = props;
+  const { slug, title, communityName, city, venue, when, placesLeft, category, coverKey } = props;
   const full = placesLeft <= 0;
   return (
     <article class="card">
@@ -268,7 +268,7 @@ export function EventCard(props: EventCardProps) {
           {venue} · {city}
         </p>
         <div class="card-foot">
-          <span class="meta">{circleName}</span>
+          <span class="meta">{communityName}</span>
           <Badge tone={full ? "quiet" : placesLeft <= 3 ? "warn" : "brass"}>
             {full ? "Full" : `${placesLeft} left`}
           </Badge>
@@ -278,32 +278,32 @@ export function EventCard(props: EventCardProps) {
   );
 }
 
-export type PassCardProps = {
+export type PackageCardProps = {
   /** Single, Trio or Season. */
   name: string;
-  credits: number;
+  tickets: number;
   /** Already formatted, e.g. "€180". Never "€180.00", never "from". */
   price: string;
-  /** The derivation: "3 gatherings · €60 each". */
+  /** The derivation: "3 events · €60 each". */
   derivation?: string;
   note?: string;
   children?: Child;
 };
 
 /**
- * A pass as a card. The circle page uses `PassTable` instead — §5 is explicit
+ * A package as a card. The community page uses `PackageTable` instead — §5 is explicit
  * that three pricing cards are the wrong shape there. This is for `/account`,
- * where a pass is a thing you own rather than a thing you are choosing between.
+ * where a package is a thing you own rather than a thing you are choosing between.
  */
-export function PassCard(props: PassCardProps) {
-  const { name, credits, price, derivation, note, children } = props;
+export function PackageCard(props: PackageCardProps) {
+  const { name, tickets, price, derivation, note, children } = props;
   return (
-    <div class="pass-card">
+    <div class="package-card">
       <span class="micro">
-        {credits} {credits === 1 ? "credit" : "credits"}
+        {tickets} {tickets === 1 ? "ticket" : "tickets"}
       </span>
-      <h3 class="pass-name">{name}</h3>
-      <p class="pass-card-price">{price}</p>
+      <h3 class="package-name">{name}</h3>
+      <p class="package-card-price">{price}</p>
       {derivation !== undefined ? <p class="meta">{derivation}</p> : null}
       {note !== undefined ? <p class="meta">{note}</p> : null}
       {children}
@@ -311,8 +311,8 @@ export function PassCard(props: PassCardProps) {
   );
 }
 
-export function PassGrid(props: { children?: Child }) {
-  return <div class="pass-grid">{props.children}</div>;
+export function PackageGrid(props: { children?: Child }) {
+  return <div class="package-grid">{props.children}</div>;
 }
 
 /* ---------- small pieces ---------- */
@@ -501,7 +501,7 @@ export function Meta(props: { bright?: boolean; num?: boolean; children?: Child 
   return <span class={cls}>{props.children}</span>;
 }
 
-/** Initials in a hairline square. Never a colour, never a circle (§7). */
+/** Initials in a hairline square. Never a colour, never a community (§7). */
 export function Avatar(props: { name: string }) {
   return (
     <span class="avatar" aria-hidden="true">

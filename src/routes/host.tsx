@@ -1,12 +1,12 @@
 /**
- * Back of house: the circles a member runs, and everything they can change.
+ * Back of house: the communities a member runs, and everything they can change.
  *
  *   GET  /host
- *   GET  /host/circles/:slug
- *   POST /host/circles
- *   POST /host/circles/:slug/events
- *   POST /host/circles/:slug/packages
- *   POST /host/circles/:slug/members/:memberId/approve
+ *   GET  /host/communities/:slug
+ *   POST /host/communities
+ *   POST /host/communities/:slug/events
+ *   POST /host/communities/:slug/packages
+ *   POST /host/communities/:slug/members/:memberId/approve
  *
  * Mounted at `/` in `src/index.ts`, so those are the contract's URLs
  * (`design/reference/api-contract.md`).
@@ -18,7 +18,7 @@
  *
  * Two rules hold on every write here:
  *
- *   - **Acting on a circle you do not host is 403** — checked before the input
+ *   - **Acting on a community you do not host is 403** — checked before the input
  *     is even read, so a stranger cannot probe a form's validation.
  *   - **A validation error re-renders the page with 400**, every submitted
  *     value echoed back, the problems listed in one `Alert`, and
@@ -26,9 +26,9 @@
  *     ever lost.
  *
  * The reads that `src/services/` does not cover — a request's date, a
- * gathering's drafts, revenue to date — are queried here. `src/db.ts` is
+ * event's drafts, revenue to date — are queried here. `src/db.ts` is
  * explicit that queries may live in a route, and every one carries a LIMIT
- * (AGENTS.md §5). Writes never do: the create-a-circle batch is the only
+ * (AGENTS.md §5). Writes never do: the create-a-community batch is the only
  * multi-table write, and it is one `batch()` (AGENTS.md §5 — `db.transaction()`
  * throws on this platform).
  */
@@ -48,17 +48,17 @@ import { formatDateRange, formatDay, formatMoney, formatTime } from "../lib/form
 import { newId, slugify, uniqueSlug } from "../lib/ids";
 import {
   bookings,
-  circleMembers,
-  circles,
+  communityMembers,
+  communities,
   events,
   orders,
   packages,
   users,
-  CIRCLE_CATEGORIES,
-  type CircleCategory,
+  COMMUNITY_CATEGORIES,
+  type CommunityCategory,
 } from "../schema";
 import { approvedMemberCount, confirmedBookingCount, placesLeft } from "../services/common";
-import { getCircleBySlug, type CircleDetail } from "../services/circles";
+import { getCommunityBySlug, type CommunityDetail } from "../services/communities";
 import { listPackages, type PackageOffer } from "../services/commerce";
 import { Alert, Button, EmptyState, Field, Hero, Section } from "../ui/components";
 import { Layout } from "../ui/layout";
@@ -69,12 +69,12 @@ type PageContext = Context<{ Bindings: AuthEnv }>;
 
 /** Every list read here is bounded (AGENTS.md §5). */
 const ROW_LIMIT = 50;
-/** Attendees across a whole circle: 8 gatherings of 24 still fits comfortably. */
+/** Attendees across a whole community: 8 events of 24 still fits comfortably. */
 const ATTENDEE_LIMIT = 200;
-/** Names printed in a gathering's row before the rest become `+N`. */
+/** Names printed in an event's row before the rest become `+N`. */
 const NAMES_SHOWN = 6;
 
-/** A gathering runs two hours unless the host says otherwise. */
+/** An event runs two hours unless the host says otherwise. */
 const DEFAULT_DURATION_HOURS = 2;
 /** Twelve is the house default; a host can change it before submitting. */
 const DEFAULT_CAPACITY = "12";
@@ -89,7 +89,7 @@ const DEFAULT_CAPACITY = "12";
 const NOWRAP = "white-space:nowrap";
 
 /**
- * `.pass-table` is `width:100%`, so inside a `.scroll-x` box it squeezes rather
+ * `.package-table` is `width:100%`, so inside a `.scroll-x` box it squeezes rather
  * than scrolls. A minimum width is what lets the box scroll instead — the
  * §10.4 answer for a ledger that cannot wrap. Measured at 375.
  */
@@ -150,16 +150,16 @@ function ErrorBanner(props: { problems: string[] }) {
 function notFoundPage(c: PageContext, me: SessionUser): Response | Promise<Response> {
   pageHeaders(c);
   return c.html(
-    <Layout title="No such circle" user={{ name: me.user.name }} active="host">
+    <Layout title="No such community" user={{ name: me.user.name }} active="host">
       <Hero
         index="00"
         label="Not found"
-        title="No such circle"
-        lede="That circle is not here. The ones you run are listed on your host page."
+        title="No such community"
+        lede="That community is not here. The ones you run are listed on your host page."
       />
       <Section index="01" label="Elsewhere" title="Where to go instead">
         <Button href="/host" variant="ghost">
-          Your circles
+          Your communities
         </Button>
       </Section>
     </Layout>,
@@ -167,27 +167,27 @@ function notFoundPage(c: PageContext, me: SessionUser): Response | Promise<Respo
   );
 }
 
-/** A styled 403 (§8). Someone else's circle is refused, not hidden. */
+/** A styled 403 (§8). Someone else's community is refused, not hidden. */
 function forbiddenPage(
   c: PageContext,
   me: SessionUser,
-  circle: { name: string },
+  community: { name: string },
 ): Response | Promise<Response> {
   pageHeaders(c);
   return c.html(
-    <Layout title="Not your circle" user={{ name: me.user.name }} active="host">
+    <Layout title="Not your community" user={{ name: me.user.name }} active="host">
       <Hero
         index="00"
         label="Refused"
-        title="Not your circle"
-        lede={`${circle.name} is run by someone else. Only its host can change it.`}
+        title="Not your community"
+        lede={`${community.name} is run by someone else. Only its host can change it.`}
       />
       <Section index="01" label="Elsewhere" title="Where to go instead">
         <div class="row">
           <Button href="/host" variant="ghost">
-            Circles you run
+            Communities you run
           </Button>
-          <Button href="/circles" variant="quiet">
+          <Button href="/communities" variant="quiet">
             The directory
           </Button>
         </div>
@@ -264,7 +264,7 @@ function toLocalInput(d: Date): string {
 
 /**
  * The coming Saturday at 18:00, so the form opens on a plausible evening
- * rather than on an empty field. Today never counts: a gathering someone is
+ * rather than on an empty field. Today never counts: an event someone is
  * filling in now is not this afternoon.
  */
 function nextSaturdayEvening(now: Date): Date {
@@ -288,12 +288,12 @@ async function freeSlug(
   return uniqueSlug(slugify(base) || fallback, taken);
 }
 
-async function circleSlugTaken(env: DatabaseEnv, candidate: string): Promise<boolean> {
+async function communitySlugTaken(env: DatabaseEnv, candidate: string): Promise<boolean> {
   const db = getDb(env);
   const [row] = await db
-    .select({ id: circles.id })
-    .from(circles)
-    .where(eq(circles.slug, candidate))
+    .select({ id: communities.id })
+    .from(communities)
+    .where(eq(communities.slug, candidate))
     .limit(1);
   return row !== undefined;
 }
@@ -311,12 +311,12 @@ async function eventSlugTaken(env: DatabaseEnv, candidate: string): Promise<bool
 /* ------------------------------------------------------------------- reads */
 
 /** One row of the host's own index. */
-type HostedCircleRow = {
+type HostedCommunityRow = {
   slug: string;
   name: string;
   city: string;
   country: string;
-  category: CircleCategory;
+  category: CommunityCategory;
   isPrivate: boolean;
   memberCount: number;
   publishedCount: number;
@@ -325,63 +325,63 @@ type HostedCircleRow = {
 };
 
 /**
- * The circles this member runs, with the three numbers a host actually checks:
+ * The communities this member runs, with the three numbers a host actually checks:
  * who is in, what is on, and who is waiting.
  *
  * Three queries rather than one: `approvedMemberCount` is a proven correlated
  * subquery (`src/services/common.ts`), while the two count-by-status rollups
  * are plain aggregates. They do not depend on each other, so they run together.
  */
-async function listHostedCircleRows(
+async function listHostedCommunityRows(
   env: DatabaseEnv,
   userId: string,
-): Promise<HostedCircleRow[]> {
+): Promise<HostedCommunityRow[]> {
   const db = getDb(env);
 
   const [rows, eventCounts, pendingCounts] = await Promise.all([
     db
       .select({
-        id: circles.id,
-        slug: circles.slug,
-        name: circles.name,
-        city: circles.city,
-        country: circles.country,
-        category: circles.category,
-        isPrivate: circles.isPrivate,
-        memberCount: approvedMemberCount(circles.id),
+        id: communities.id,
+        slug: communities.slug,
+        name: communities.name,
+        city: communities.city,
+        country: communities.country,
+        category: communities.category,
+        isPrivate: communities.isPrivate,
+        memberCount: approvedMemberCount(communities.id),
       })
-      .from(circles)
-      .where(eq(circles.hostUserId, userId))
-      .orderBy(asc(circles.createdAt))
+      .from(communities)
+      .where(eq(communities.hostUserId, userId))
+      .orderBy(asc(communities.createdAt))
       .limit(ROW_LIMIT),
 
     db
       .select({
-        circleId: events.circleId,
+        communityId: events.communityId,
         status: events.status,
         n: sql<number>`count(*)::int`.mapWith(Number),
       })
       .from(events)
-      .innerJoin(circles, eq(circles.id, events.circleId))
-      .where(eq(circles.hostUserId, userId))
-      .groupBy(events.circleId, events.status)
+      .innerJoin(communities, eq(communities.id, events.communityId))
+      .where(eq(communities.hostUserId, userId))
+      .groupBy(events.communityId, events.status)
       .limit(ROW_LIMIT * 3),
 
     db
-      .select({ circleId: circleMembers.circleId, n: sql<number>`count(*)::int`.mapWith(Number) })
-      .from(circleMembers)
-      .innerJoin(circles, eq(circles.id, circleMembers.circleId))
-      .where(and(eq(circles.hostUserId, userId), eq(circleMembers.status, "pending")))
-      .groupBy(circleMembers.circleId)
+      .select({ communityId: communityMembers.communityId, n: sql<number>`count(*)::int`.mapWith(Number) })
+      .from(communityMembers)
+      .innerJoin(communities, eq(communities.id, communityMembers.communityId))
+      .where(and(eq(communities.hostUserId, userId), eq(communityMembers.status, "pending")))
+      .groupBy(communityMembers.communityId)
       .limit(ROW_LIMIT),
   ]);
 
-  const pendingById = new Map(pendingCounts.map((row) => [row.circleId, Number(row.n)]));
+  const pendingById = new Map(pendingCounts.map((row) => [row.communityId, Number(row.n)]));
   const published = new Map<string, number>();
   const drafts = new Map<string, number>();
   for (const row of eventCounts) {
     const target = row.status === "published" ? published : row.status === "draft" ? drafts : null;
-    if (target) target.set(row.circleId, Number(row.n));
+    if (target) target.set(row.communityId, Number(row.n));
   }
 
   return rows.map((row) => ({
@@ -398,7 +398,7 @@ async function listHostedCircleRows(
   }));
 }
 
-/** A gathering as its host sees it — drafts included, and who is coming. */
+/** An event as its host sees it — drafts included, and who is coming. */
 type HostEvent = {
   id: string;
   slug: string;
@@ -410,8 +410,8 @@ type HostEvent = {
   confirmed: number;
 };
 
-/** Every gathering of one circle, any status. Members only ever see the published ones. */
-async function listHostEvents(env: DatabaseEnv, circleId: string): Promise<HostEvent[]> {
+/** Every event of one community, any status. Members only ever see the published ones. */
+async function listHostEvents(env: DatabaseEnv, communityId: string): Promise<HostEvent[]> {
   const db = getDb(env);
   const rows = await db
     .select({
@@ -425,7 +425,7 @@ async function listHostEvents(env: DatabaseEnv, circleId: string): Promise<HostE
       confirmed: confirmedBookingCount(events.id),
     })
     .from(events)
-    .where(eq(events.circleId, circleId))
+    .where(eq(events.communityId, communityId))
     .orderBy(asc(events.startsAt))
     .limit(ROW_LIMIT);
   return rows.map((row) => ({
@@ -435,10 +435,10 @@ async function listHostEvents(env: DatabaseEnv, circleId: string): Promise<HostE
   }));
 }
 
-/** Confirmed attendees for every gathering of one circle, in one round trip. */
+/** Confirmed attendees for every event of one community, in one round trip. */
 async function attendeesByEvent(
   env: DatabaseEnv,
-  circleId: string,
+  communityId: string,
 ): Promise<Map<string, string[]>> {
   const db = getDb(env);
   const rows = await db
@@ -446,7 +446,7 @@ async function attendeesByEvent(
     .from(bookings)
     .innerJoin(users, eq(users.id, bookings.userId))
     .innerJoin(events, eq(events.id, bookings.eventId))
-    .where(and(eq(events.circleId, circleId), eq(bookings.status, "confirmed")))
+    .where(and(eq(events.communityId, communityId), eq(bookings.status, "confirmed")))
     .orderBy(asc(bookings.createdAt))
     .limit(ATTENDEE_LIMIT);
 
@@ -471,50 +471,50 @@ type RosterEntry = {
 };
 
 /**
- * Everyone with a row in this circle — approved, pending and declined — with
+ * Everyone with a row in this community — approved, pending and declined — with
  * the date attached. The public list (`listApprovedMembers`) filters pending
  * rows out by design and carries no dates; the host needs both.
  */
-async function listRoster(env: DatabaseEnv, circleId: string): Promise<RosterEntry[]> {
+async function listRoster(env: DatabaseEnv, communityId: string): Promise<RosterEntry[]> {
   const db = getDb(env);
   return db
     .select({
-      membershipId: circleMembers.id,
+      membershipId: communityMembers.id,
       name: users.name,
       headline: users.headline,
       city: users.city,
-      role: circleMembers.role,
-      status: circleMembers.status,
-      since: circleMembers.createdAt,
+      role: communityMembers.role,
+      status: communityMembers.status,
+      since: communityMembers.createdAt,
     })
-    .from(circleMembers)
-    .innerJoin(users, eq(users.id, circleMembers.userId))
-    .where(eq(circleMembers.circleId, circleId))
-    .orderBy(asc(circleMembers.createdAt))
+    .from(communityMembers)
+    .innerJoin(users, eq(users.id, communityMembers.userId))
+    .where(eq(communityMembers.communityId, communityId))
+    .orderBy(asc(communityMembers.createdAt))
     .limit(ROW_LIMIT);
 }
 
-/** Money taken for one circle, per currency — passes are priced in the circle's own. */
-type RevenueLine = { currency: string; orders: number; credits: number; cents: number };
+/** Money taken for one community, per currency — packages are priced in the community's own. */
+type RevenueLine = { currency: string; orders: number; tickets: number; cents: number };
 
-async function revenueToDate(env: DatabaseEnv, circleId: string): Promise<RevenueLine[]> {
+async function revenueToDate(env: DatabaseEnv, communityId: string): Promise<RevenueLine[]> {
   const db = getDb(env);
   return db
     .select({
       currency: orders.currency,
       orders: sql<number>`count(*)::int`.mapWith(Number),
-      credits: sql<number>`sum(${orders.credits})::int`.mapWith(Number),
+      tickets: sql<number>`sum(${orders.tickets})::int`.mapWith(Number),
       cents: sql<number>`sum(${orders.amountCents})::int`.mapWith(Number),
     })
     .from(orders)
-    .where(and(eq(orders.circleId, circleId), eq(orders.status, "paid")))
+    .where(and(eq(orders.communityId, communityId), eq(orders.status, "paid")))
     .groupBy(orders.currency)
     .limit(10);
 }
 
 /**
- * The currency a new pass is priced in: whatever this circle already sells in,
- * else the country's (§6 — currency follows the circle's country).
+ * The currency a new package is priced in: whatever this community already sells in,
+ * else the country's (§6 — currency follows the community's country).
  */
 const CURRENCY_BY_COUNTRY: Record<string, string> = {
   Monaco: "EUR",
@@ -537,13 +537,13 @@ const CURRENCY_BY_COUNTRY: Record<string, string> = {
   Canada: "CAD",
 };
 
-function currencyFor(circle: { country: string }, existing: PackageOffer[]): string {
-  return existing[0]?.currency ?? CURRENCY_BY_COUNTRY[circle.country] ?? "USD";
+function currencyFor(community: { country: string }, existing: PackageOffer[]): string {
+  return existing[0]?.currency ?? CURRENCY_BY_COUNTRY[community.country] ?? "USD";
 }
 
 /* -------------------------------------------------------------- /host page */
 
-type CircleForm = {
+type CommunityForm = {
   name: string;
   tagline: string;
   description: string;
@@ -553,7 +553,7 @@ type CircleForm = {
   isPrivate: boolean;
 };
 
-const EMPTY_CIRCLE_FORM: CircleForm = {
+const EMPTY_COMMUNITY_FORM: CommunityForm = {
   name: "",
   tagline: "",
   description: "",
@@ -575,7 +575,7 @@ function CategoryChoice(props: { value: string; error?: string }) {
         Category<span class="field-req"> *</span>
       </legend>
       <div class="row" style="gap:8px 24px">
-        {CIRCLE_CATEGORIES.map((category) => (
+        {COMMUNITY_CATEGORIES.map((category) => (
           <label
             class="micro"
             style="display:inline-flex;align-items:center;gap:8px;min-height:44px;cursor:pointer"
@@ -605,15 +605,15 @@ function HostPage(props: {
   flash: Flash | null;
   problems: string[];
   errors: Errors;
-  form: CircleForm;
-  rows: HostedCircleRow[];
+  form: CommunityForm;
+  rows: HostedCommunityRow[];
 }) {
   const { user, flash, problems, errors, form, rows } = props;
 
   return (
     <Layout
       title="Host"
-      description="The circles you run, and the form that starts another."
+      description="The communities you run, and the form that starts another."
       user={{ name: user.name }}
       active="host"
     >
@@ -624,25 +624,25 @@ function HostPage(props: {
         index="01"
         label="Host"
         title="Back of house"
-        lede="Your circles, what is on, and who is waiting. Members never see this side."
+        lede="Your communities, what is on, and who is waiting. Members never see this side."
       />
 
-      <Section index="02" label="Circles" title="Circles you run">
+      <Section index="02" label="Communities" title="Communities you run">
         {rows.length === 0 ? (
           <EmptyState
-            title="No circles yet."
-            note="A circle needs a name, a city and a description. The form below starts one."
-            action={{ href: "#new-circle", label: "Start a circle" }}
+            title="No communities yet."
+            note="A community needs a name, a city and a description. The form below starts one."
+            action={{ href: "#new-community", label: "Start a community" }}
           />
         ) : (
           <div class="bordered scroll-x" tabindex={0} data-hosted="">
-            <table class="pass-table" style={wide(38)}>
+            <table class="package-table" style={wide(38)}>
               <thead style={NOWRAP}>
                 <tr>
-                  <th scope="col">Circle</th>
+                  <th scope="col">Community</th>
                   <th scope="col">Where</th>
                   <th scope="col">Members</th>
-                  <th scope="col">Gatherings</th>
+                  <th scope="col">Events</th>
                   <th scope="col">Waiting</th>
                 </tr>
               </thead>
@@ -650,14 +650,14 @@ function HostPage(props: {
                 {rows.map((row) => (
                   <tr>
                     <th scope="row">
-                      <a href={`/host/circles/${row.slug}`}>{row.name}</a>
-                      <span class="pass-derivation">
+                      <a href={`/host/communities/${row.slug}`}>{row.name}</a>
+                      <span class="package-derivation">
                         {row.category} · {row.isPrivate ? "by request" : "open"}
                       </span>
                     </th>
                     <td>
                       {row.city}
-                      <span class="pass-derivation">{row.country}</span>
+                      <span class="package-derivation">{row.country}</span>
                     </td>
                     <td class="num" style={NOWRAP}>
                       {row.memberCount}
@@ -665,12 +665,12 @@ function HostPage(props: {
                     <td class="num" style={NOWRAP}>
                       {row.publishedCount}
                       {row.draftCount > 0 ? (
-                        <span class="pass-derivation num">{row.draftCount} draft</span>
+                        <span class="package-derivation num">{row.draftCount} draft</span>
                       ) : null}
                     </td>
                     <td class="num" style={NOWRAP}>
                       {row.pendingCount > 0 ? (
-                        <a href={`/host/circles/${row.slug}#requests`}>{row.pendingCount}</a>
+                        <a href={`/host/communities/${row.slug}#requests`}>{row.pendingCount}</a>
                       ) : (
                         "0"
                       )}
@@ -683,8 +683,8 @@ function HostPage(props: {
         )}
       </Section>
 
-      <Section index="03" label="New" title="Start a circle" id="new-circle">
-        <form class="column-420" method="post" action="/host/circles" data-new-circle="">
+      <Section index="03" label="New" title="Start a community" id="new-community">
+        <form class="column-420" method="post" action="/host/communities" data-new-community="">
           <Field
             label="Name"
             name="name"
@@ -718,7 +718,7 @@ function HostPage(props: {
             value={form.country}
             required={true}
             error={errors.country}
-            hint="Passes are priced in this country's currency."
+            hint="Packages are priced in this country's currency."
           />
 
           <div style="margin-block-start:24px">
@@ -740,14 +740,14 @@ function HostPage(props: {
               <span>Approve members by hand</span>
             </label>
             <span class="field-hint">
-              Left off, buying a pass joins the circle at once. Turned on, every member waits for
+              Left off, buying a package joins the community at once. Turned on, every member waits for
               you.
             </span>
           </div>
 
           <div style="margin-block-start:32px">
             <Button type="submit" variant="primary">
-              Create the circle
+              Create the community
             </Button>
           </div>
         </form>
@@ -760,10 +760,10 @@ function HostPage(props: {
 async function renderHost(
   c: PageContext,
   me: SessionUser,
-  state: { flash: Flash | null; problems: string[]; errors: Errors; form: CircleForm },
+  state: { flash: Flash | null; problems: string[]; errors: Errors; form: CommunityForm },
   status: 200 | 400,
 ): Promise<Response> {
-  const rows = await listHostedCircleRows(c.env, me.user.id);
+  const rows = await listHostedCommunityRows(c.env, me.user.id);
   pageHeaders(c);
   return c.html(
     <HostPage
@@ -783,15 +783,15 @@ host.get("/host", async (c) => {
   if (me instanceof Response) return me;
 
   const flash = await takeFlash(c.env, me.session);
-  return renderHost(c, me, { flash, problems: [], errors: {}, form: EMPTY_CIRCLE_FORM }, 200);
+  return renderHost(c, me, { flash, problems: [], errors: {}, form: EMPTY_COMMUNITY_FORM }, 200);
 });
 
-host.post("/host/circles", async (c) => {
+host.post("/host/communities", async (c) => {
   const me = await requireUser(c);
   if (me instanceof Response) return me;
 
   const body = await c.req.parseBody();
-  const form: CircleForm = {
+  const form: CommunityForm = {
     name: readField(body, "name"),
     tagline: readField(body, "tagline"),
     description: readField(body, "description"),
@@ -807,8 +807,8 @@ host.post("/host/circles", async (c) => {
   requireText(errors, "description", form.description, "A description", 4000);
   requireText(errors, "city", form.city, "A city", 120);
   requireText(errors, "country", form.country, "A country", 120);
-  if (!(CIRCLE_CATEGORIES as readonly string[]).includes(form.category)) {
-    errors.category = `Pick one of: ${CIRCLE_CATEGORIES.join(", ")}.`;
+  if (!(COMMUNITY_CATEGORIES as readonly string[]).includes(form.category)) {
+    errors.category = `Pick one of: ${COMMUNITY_CATEGORIES.join(", ")}.`;
   }
 
   const problems = Object.values(errors);
@@ -816,30 +816,30 @@ host.post("/host/circles", async (c) => {
     return renderHost(c, me, { flash: null, problems, errors, form }, 400);
   }
 
-  const slug = await freeSlug(c.env, form.name, "circle", (candidate) =>
-    circleSlugTaken(c.env, candidate),
+  const slug = await freeSlug(c.env, form.name, "community", (candidate) =>
+    communitySlugTaken(c.env, candidate),
   );
 
   const db = getDb(c.env);
-  const circleId = newId();
-  // Two tables, one all-or-nothing write: a circle with no host row would be a
-  // circle its own host could not manage. `db.transaction()` throws here.
+  const communityId = newId();
+  // Two tables, one all-or-nothing write: a community with no host row would be a
+  // community its own host could not manage. `db.transaction()` throws here.
   await batch(c.env, [
-    db.insert(circles).values({
-      id: circleId,
+    db.insert(communities).values({
+      id: communityId,
       slug,
       name: form.name,
       tagline: form.tagline,
       description: form.description,
       city: form.city,
       country: form.country,
-      category: form.category as CircleCategory,
+      category: form.category as CommunityCategory,
       hostUserId: me.user.id,
       isPrivate: form.isPrivate,
     }),
-    db.insert(circleMembers).values({
+    db.insert(communityMembers).values({
       id: newId(),
-      circleId,
+      communityId,
       userId: me.user.id,
       role: "host",
       status: "approved",
@@ -849,12 +849,12 @@ host.post("/host/circles", async (c) => {
   return redirectWith(
     c,
     me.session,
-    `${form.name} exists. Add a pass and a gathering and it is open.`,
-    `/host/circles/${slug}`,
+    `${form.name} exists. Add a package and an event and it is open.`,
+    `/host/communities/${slug}`,
   );
 });
 
-/* ------------------------------------------------------- /host/circles/:slug */
+/* ------------------------------------------------------- /host/communities/:slug */
 
 type EventForm = {
   title: string;
@@ -868,10 +868,10 @@ type EventForm = {
   status: string;
 };
 
-type PackageForm = { name: string; credits: string; priceCents: string };
+type PackageForm = { name: string; tickets: string; priceCents: string };
 
 /** The form as it opens: this Saturday at 18:00, two hours, twelve places, published. */
-function defaultEventForm(circle: { city: string }, now: Date): EventForm {
+function defaultEventForm(community: { city: string }, now: Date): EventForm {
   const startsAt = nextSaturdayEvening(now);
   const endsAt = new Date(startsAt.getTime() + DEFAULT_DURATION_HOURS * 3_600_000);
   return {
@@ -879,7 +879,7 @@ function defaultEventForm(circle: { city: string }, now: Date): EventForm {
     summary: "",
     description: "",
     venue: "",
-    city: circle.city,
+    city: community.city,
     startsAt: toLocalInput(startsAt),
     endsAt: toLocalInput(endsAt),
     capacity: DEFAULT_CAPACITY,
@@ -888,10 +888,10 @@ function defaultEventForm(circle: { city: string }, now: Date): EventForm {
   };
 }
 
-const EMPTY_PACKAGE_FORM: PackageForm = { name: "", credits: "", priceCents: "" };
+const EMPTY_PACKAGE_FORM: PackageForm = { name: "", tickets: "", priceCents: "" };
 
 type ManageData = {
-  circle: CircleDetail;
+  community: CommunityDetail;
   events: HostEvent[];
   attendees: Map<string, string[]>;
   roster: RosterEntry[];
@@ -909,7 +909,7 @@ type ManageState = {
 
 function ManagePage(props: { user: { name: string }; data: ManageData; state: ManageState }) {
   const { user, data, state } = props;
-  const { circle, events: gatherings, attendees, roster, offers, revenue } = data;
+  const { community, events: events, attendees, roster, offers, revenue } = data;
   const { flash, problems, errors, eventForm, packageForm } = state;
 
   const pending = roster.filter((entry) => entry.status === "pending");
@@ -917,69 +917,69 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
 
   return (
     <Layout
-      title={`${circle.name} · host`}
-      description={`Back of house for ${circle.name}.`}
+      title={`${community.name} · host`}
+      description={`Back of house for ${community.name}.`}
       user={{ name: user.name }}
       active="host"
     >
       {problems.length > 0 ? <ErrorBanner problems={problems} /> : null}
       {flash !== null && problems.length === 0 ? <FlashBanner message={flash} /> : null}
 
-      <Hero index="01" label="Manage" title={circle.name}>
+      <Hero index="01" label="Manage" title={community.name}>
         <p class="meta">
-          {circle.city} · {circle.category} · {circle.isPrivate ? "By request" : "Open"} ·{" "}
-          <a href={`/circles/${circle.slug}`}>See it as a member does</a>
+          {community.city} · {community.category} · {community.isPrivate ? "By request" : "Open"} ·{" "}
+          <a href={`/communities/${community.slug}`}>See it as a member does</a>
         </p>
       </Hero>
 
       <Section
         index="02"
-        label="Gatherings"
+        label="Events"
         title="What is on"
-        action={{ href: "#new-gathering", label: "Add a gathering" }}
+        action={{ href: "#new-event", label: "Add an event" }}
       >
-        {gatherings.length === 0 ? (
+        {events.length === 0 ? (
           <EmptyState
-            title="No gatherings yet."
-            note="Members see published gatherings only. The form below adds one."
-            action={{ href: "#new-gathering", label: "Add a gathering" }}
+            title="No events yet."
+            note="Members see published events only. The form below adds one."
+            action={{ href: "#new-event", label: "Add an event" }}
           />
         ) : (
-          <div class="bordered scroll-x" tabindex={0} data-gatherings="">
-            <table class="pass-table" style={wide(46)}>
+          <div class="bordered scroll-x" tabindex={0} data-events="">
+            <table class="package-table" style={wide(46)}>
               <thead style={NOWRAP}>
                 <tr>
                   <th scope="col">When</th>
-                  <th scope="col">Gathering</th>
+                  <th scope="col">Event</th>
                   <th scope="col">Standing</th>
                   <th scope="col">Fill</th>
                   <th scope="col">Coming</th>
                 </tr>
               </thead>
               <tbody>
-                {gatherings.map((gathering) => {
-                  const names = attendees.get(gathering.id) ?? [];
+                {events.map((event) => {
+                  const names = attendees.get(event.id) ?? [];
                   const shown = names.slice(0, NAMES_SHOWN);
                   const hidden = names.length - shown.length;
                   return (
                     <tr>
                       <td class="num" style={NOWRAP}>
-                        {formatDay(gathering.startsAt)}
-                        <span class="pass-derivation num">
-                          {formatTime(gathering.startsAt)}–{formatTime(gathering.endsAt)}
+                        {formatDay(event.startsAt)}
+                        <span class="package-derivation num">
+                          {formatTime(event.startsAt)}–{formatTime(event.endsAt)}
                         </span>
                       </td>
                       <th scope="row">
-                        <a href={`/events/${gathering.slug}`}>{gathering.title}</a>
+                        <a href={`/events/${event.slug}`}>{event.title}</a>
                       </th>
                       <td>
                         {/* Status is uppercase micro text. Never a coloured chip (§5). */}
-                        <span class="status">{gathering.status}</span>
+                        <span class="status">{event.status}</span>
                       </td>
                       <td class="num" style={NOWRAP}>
-                        {gathering.confirmed} of {gathering.capacity}
-                        <span class="pass-derivation num">
-                          {placesLeft(gathering.capacity, gathering.confirmed)} left
+                        {event.confirmed} of {event.capacity}
+                        <span class="package-derivation num">
+                          {placesLeft(event.capacity, event.confirmed)} left
                         </span>
                       </td>
                       <td style="text-align:left">
@@ -1006,14 +1006,14 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
           <EmptyState
             title="Nobody is waiting."
             note={
-              circle.isPrivate
+              community.isPrivate
                 ? "Requests to join land here, oldest first."
-                : "This circle is open, so buying a pass joins it without asking you."
+                : "This community is open, so buying a package joins it without asking you."
             }
           />
         ) : (
           <div class="bordered scroll-x" tabindex={0} data-requests="">
-            <table class="pass-table" style={wide(30)}>
+            <table class="package-table" style={wide(30)}>
               <thead style={NOWRAP}>
                 <tr>
                   <th scope="col">Who</th>
@@ -1026,7 +1026,7 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
                   <tr>
                     <th scope="row">
                       {entry.name}
-                      <span class="pass-derivation">{entry.headline ?? entry.city ?? ""}</span>
+                      <span class="package-derivation">{entry.headline ?? entry.city ?? ""}</span>
                     </th>
                     <td class="num" style={NOWRAP}>
                       {formatDay(entry.since)}
@@ -1034,7 +1034,7 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
                     <td>
                       <form
                         method="post"
-                        action={`/host/circles/${circle.slug}/members/${entry.membershipId}/approve`}
+                        action={`/host/communities/${community.slug}/members/${entry.membershipId}/approve`}
                       >
                         <Button type="submit" variant="ghost">
                           Approve
@@ -1049,11 +1049,11 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
         )}
       </Section>
 
-      {/* The count comes from the same SQL count the card and the circle page
+      {/* The count comes from the same SQL count the card and the community page
           print (§8), not from the length of the table below it. */}
-      <Section index="04" label="Members" title={`${circle.memberCount} in the circle`}>
+      <Section index="04" label="Members" title={`${community.memberCount} in the community`}>
         <div class="bordered scroll-x" tabindex={0} data-members="">
-          <table class="pass-table" style={wide(40)}>
+          <table class="package-table" style={wide(40)}>
             <thead style={NOWRAP}>
               <tr>
                 <th scope="col">Name</th>
@@ -1067,7 +1067,7 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
                 <tr>
                   <th scope="row">
                     {entry.name}
-                    {entry.role === "host" ? <span class="pass-derivation">Host</span> : null}
+                    {entry.role === "host" ? <span class="package-derivation">Host</span> : null}
                   </th>
                   <td>
                     <span class="meta">{entry.headline ?? ""}</span>
@@ -1087,23 +1087,23 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
 
       <Section
         index="05"
-        label="Passes"
-        title="What the circle sells"
-        action={{ href: "#new-pass", label: "Add a pass" }}
+        label="Packages"
+        title="What the community sells"
+        action={{ href: "#new-package", label: "Add a package" }}
       >
         {offers.length === 0 ? (
           <EmptyState
-            title="No passes yet."
-            note="Nobody can book until a pass exists. One credit takes one place."
-            action={{ href: "#new-pass", label: "Add a pass" }}
+            title="No packages yet."
+            note="Nobody can book until a package exists. One ticket takes one place."
+            action={{ href: "#new-package", label: "Add a package" }}
           />
         ) : (
-          <div class="bordered scroll-x" tabindex={0} data-passes="">
-            <table class="pass-table" style={wide(28)}>
+          <div class="bordered scroll-x" tabindex={0} data-packages="">
+            <table class="package-table" style={wide(28)}>
               <thead style={NOWRAP}>
                 <tr>
-                  <th scope="col">Pass</th>
-                  <th scope="col">Credits</th>
+                  <th scope="col">Package</th>
+                  <th scope="col">Tickets</th>
                   <th scope="col">Price</th>
                   <th scope="col">Each</th>
                 </tr>
@@ -1113,14 +1113,14 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
                   <tr>
                     <th scope="row">{offer.name}</th>
                     <td class="num" style={NOWRAP}>
-                      {offer.credits}
+                      {offer.tickets}
                     </td>
                     <td class="num" style={NOWRAP}>
                       {formatMoney(offer.priceCents, offer.currency)}
                     </td>
                     <td class="num" style={NOWRAP}>
                       {formatMoney(
-                        Math.round(offer.priceCents / Math.max(1, offer.credits)),
+                        Math.round(offer.priceCents / Math.max(1, offer.tickets)),
                         offer.currency,
                       )}
                     </td>
@@ -1134,15 +1134,15 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
 
       <Section index="06" label="Money" title="Revenue to date">
         {revenue.length === 0 ? (
-          <EmptyState title="Nothing sold yet." note="Passes bought by members are totalled here." />
+          <EmptyState title="Nothing sold yet." note="Packages bought by members are totalled here." />
         ) : (
           <div class="bordered scroll-x" tabindex={0} data-revenue="">
-            <table class="pass-table" style={wide(30)}>
+            <table class="package-table" style={wide(30)}>
               <thead style={NOWRAP}>
                 <tr>
                   <th scope="col">Currency</th>
                   <th scope="col">Orders</th>
-                  <th scope="col">Credits sold</th>
+                  <th scope="col">Tickets sold</th>
                   <th scope="col">Taken</th>
                 </tr>
               </thead>
@@ -1156,9 +1156,9 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
                       {line.orders}
                     </td>
                     <td class="num" style={NOWRAP}>
-                      {line.credits}
+                      {line.tickets}
                     </td>
-                    <td class="num pass-price" style={NOWRAP}>
+                    <td class="num package-price" style={NOWRAP}>
                       {formatMoney(line.cents, line.currency)}
                     </td>
                   </tr>
@@ -1169,11 +1169,11 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
         )}
       </Section>
 
-      <Section index="07" label="New" title="Add a gathering" id="new-gathering">
+      <Section index="07" label="New" title="Add an event" id="new-event">
         <form
           class="column-420"
           method="post"
-          action={`/host/circles/${circle.slug}/events`}
+          action={`/host/communities/${community.slug}/events`}
           data-new-event=""
         >
           <Field
@@ -1286,21 +1286,21 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
 
           <div style="margin-block-start:32px">
             <Button type="submit" variant="primary">
-              Add the gathering
+              Add the event
             </Button>
           </div>
         </form>
       </Section>
 
-      <Section index="08" label="New" title="Add a pass" id="new-pass">
+      <Section index="08" label="New" title="Add a package" id="new-package">
         <form
           class="column-420"
           method="post"
-          action={`/host/circles/${circle.slug}/packages`}
+          action={`/host/communities/${community.slug}/packages`}
           data-new-package=""
         >
           <Field
-            label="Pass name"
+            label="Package name"
             name="name"
             value={packageForm.name}
             required={true}
@@ -1308,14 +1308,14 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
             hint="Single, Trio and Season are the usual three."
           />
           <Field
-            label="Credits"
-            name="credits"
+            label="Tickets"
+            name="tickets"
             type="number"
             inputmode="numeric"
-            value={packageForm.credits}
+            value={packageForm.tickets}
             required={true}
-            error={errors.credits}
-            hint="One credit takes one place at one gathering."
+            error={errors.tickets}
+            hint="One ticket takes one place at one event."
           />
           <Field
             label="Price in cents"
@@ -1325,11 +1325,11 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
             value={packageForm.priceCents}
             required={true}
             error={errors.priceCents}
-            hint={`Whole cents, ${currencyFor(circle, offers)}. 36000 is 360.`}
+            hint={`Whole cents, ${currencyFor(community, offers)}. 36000 is 360.`}
           />
           <div style="margin-block-start:32px">
             <Button type="submit" variant="primary">
-              Add the pass
+              Add the package
             </Button>
           </div>
         </form>
@@ -1339,73 +1339,73 @@ function ManagePage(props: { user: { name: string }; data: ManageData; state: Ma
 }
 
 /** Everything the manage page reads, in two waves. */
-async function loadManage(env: DatabaseEnv, circle: CircleDetail): Promise<ManageData> {
-  const [gatherings, attendees, roster, offers, revenue] = await Promise.all([
-    listHostEvents(env, circle.id),
-    attendeesByEvent(env, circle.id),
-    listRoster(env, circle.id),
-    listPackages(env, circle.id),
-    revenueToDate(env, circle.id),
+async function loadManage(env: DatabaseEnv, community: CommunityDetail): Promise<ManageData> {
+  const [events, attendees, roster, offers, revenue] = await Promise.all([
+    listHostEvents(env, community.id),
+    attendeesByEvent(env, community.id),
+    listRoster(env, community.id),
+    listPackages(env, community.id),
+    revenueToDate(env, community.id),
   ]);
-  return { circle, events: gatherings, attendees, roster, offers, revenue };
+  return { community, events: events, attendees, roster, offers, revenue };
 }
 
 async function renderManage(
   c: PageContext,
   me: SessionUser,
-  circle: CircleDetail,
+  community: CommunityDetail,
   state: ManageState,
   status: 200 | 400,
 ): Promise<Response> {
-  const data = await loadManage(c.env, circle);
+  const data = await loadManage(c.env, community);
   pageHeaders(c);
   return c.html(<ManagePage user={{ name: me.user.name }} data={data} state={state} />, status);
 }
 
 /**
- * The circle in the URL, plus the guard: missing is 404, someone else's is 403.
- * The host id comes back with the circle, so the check costs no extra query.
+ * The community in the URL, plus the guard: missing is 404, someone else's is 403.
+ * The host id comes back with the community, so the check costs no extra query.
  */
-async function requireHostedCircle(
+async function requireHostedCommunity(
   c: PageContext,
   me: SessionUser,
-): Promise<CircleDetail | Response> {
-  const found = await getCircleBySlug(c.env, c.req.param("slug") ?? "");
+): Promise<CommunityDetail | Response> {
+  const found = await getCommunityBySlug(c.env, c.req.param("slug") ?? "");
   if (!found) return notFoundPage(c, me);
-  if (found.host.id !== me.user.id) return forbiddenPage(c, me, found.circle);
-  return found.circle;
+  if (found.host.id !== me.user.id) return forbiddenPage(c, me, found.community);
+  return found.community;
 }
 
-host.get("/host/circles/:slug", async (c) => {
+host.get("/host/communities/:slug", async (c) => {
   const me = await requireUser(c);
   if (me instanceof Response) return me;
 
-  const circle = await requireHostedCircle(c, me);
-  if (circle instanceof Response) return circle;
+  const community = await requireHostedCommunity(c, me);
+  if (community instanceof Response) return community;
 
   const flash = await takeFlash(c.env, me.session);
   return renderManage(
     c,
     me,
-    circle,
+    community,
     {
       flash,
       problems: [],
       errors: {},
-      eventForm: defaultEventForm(circle, new Date()),
+      eventForm: defaultEventForm(community, new Date()),
       packageForm: EMPTY_PACKAGE_FORM,
     },
     200,
   );
 });
 
-host.post("/host/circles/:slug/events", async (c) => {
+host.post("/host/communities/:slug/events", async (c) => {
   const me = await requireUser(c);
   if (me instanceof Response) return me;
 
   // Authorisation before input: a stranger never gets to probe the validation.
-  const circle = await requireHostedCircle(c, me);
-  if (circle instanceof Response) return circle;
+  const community = await requireHostedCommunity(c, me);
+  if (community instanceof Response) return community;
 
   const body = await c.req.parseBody();
   const form: EventForm = {
@@ -1441,7 +1441,7 @@ host.post("/host/circles/:slug/events", async (c) => {
     return renderManage(
       c,
       me,
-      circle,
+      community,
       {
         flash: null,
         problems,
@@ -1453,14 +1453,14 @@ host.post("/host/circles/:slug/events", async (c) => {
     );
   }
 
-  const slug = await freeSlug(c.env, form.title, "gathering", (candidate) =>
+  const slug = await freeSlug(c.env, form.title, "event", (candidate) =>
     eventSlugTaken(c.env, candidate),
   );
 
   const db = getDb(c.env);
   await db.insert(events).values({
     id: newId(),
-    circleId: circle.id,
+    communityId: community.id,
     slug,
     title: form.title,
     summary: form.summary,
@@ -1480,57 +1480,57 @@ host.post("/host/circles/:slug/events", async (c) => {
     form.status === "draft"
       ? `${form.title} is saved as a draft, so members cannot see it yet. ${when}.`
       : `${form.title} is published. ${when}, ${capacity} places.`,
-    `/host/circles/${circle.slug}`,
+    `/host/communities/${community.slug}`,
   );
 });
 
-host.post("/host/circles/:slug/packages", async (c) => {
+host.post("/host/communities/:slug/packages", async (c) => {
   const me = await requireUser(c);
   if (me instanceof Response) return me;
 
-  const circle = await requireHostedCircle(c, me);
-  if (circle instanceof Response) return circle;
+  const community = await requireHostedCommunity(c, me);
+  if (community instanceof Response) return community;
 
   const body = await c.req.parseBody();
   const form: PackageForm = {
     name: readField(body, "name"),
-    credits: readField(body, "credits"),
+    tickets: readField(body, "tickets"),
     priceCents: readField(body, "priceCents"),
   };
 
   const errors: Errors = {};
-  // Keyed `packageName` so it cannot collide with the gathering form's `title`
-  // or with a circle's `name` in the shared error map.
-  if (form.name === "") errors.packageName = "The pass needs a name.";
-  else if (form.name.length > 80) errors.packageName = "The pass name is longer than 80 characters.";
-  const credits = readNumber(errors, "credits", form.credits, "Credits", 1, 100);
+  // Keyed `packageName` so it cannot collide with the event form's `title`
+  // or with a community's `name` in the shared error map.
+  if (form.name === "") errors.packageName = "The package needs a name.";
+  else if (form.name.length > 80) errors.packageName = "The package name is longer than 80 characters.";
+  const tickets = readNumber(errors, "tickets", form.tickets, "Tickets", 1, 100);
   const priceCents = readNumber(errors, "priceCents", form.priceCents, "The price in cents", 0, 100_000_000);
 
   const problems = Object.values(errors);
-  if (problems.length > 0 || credits === null || priceCents === null) {
+  if (problems.length > 0 || tickets === null || priceCents === null) {
     return renderManage(
       c,
       me,
-      circle,
+      community,
       {
         flash: null,
         problems,
         errors,
-        eventForm: defaultEventForm(circle, new Date()),
+        eventForm: defaultEventForm(community, new Date()),
         packageForm: form,
       },
       400,
     );
   }
 
-  const existing = await listPackages(c.env, circle.id);
-  const currency = currencyFor(circle, existing);
+  const existing = await listPackages(c.env, community.id);
+  const currency = currencyFor(community, existing);
   const db = getDb(c.env);
   await db.insert(packages).values({
     id: newId(),
-    circleId: circle.id,
+    communityId: community.id,
     name: form.name,
-    credits,
+    tickets,
     priceCents,
     currency,
     sortOrder: existing.length,
@@ -1539,28 +1539,28 @@ host.post("/host/circles/:slug/packages", async (c) => {
   return redirectWith(
     c,
     me.session,
-    `${form.name} is on sale. ${credits} ${credits === 1 ? "credit" : "credits"} for ${formatMoney(priceCents, currency)}.`,
-    `/host/circles/${circle.slug}`,
+    `${form.name} is on sale. ${tickets} ${tickets === 1 ? "ticket" : "tickets"} for ${formatMoney(priceCents, currency)}.`,
+    `/host/communities/${community.slug}`,
   );
 });
 
-host.post("/host/circles/:slug/members/:memberId/approve", async (c) => {
+host.post("/host/communities/:slug/members/:memberId/approve", async (c) => {
   const me = await requireUser(c);
   if (me instanceof Response) return me;
 
-  const circle = await requireHostedCircle(c, me);
-  if (circle instanceof Response) return circle;
+  const community = await requireHostedCommunity(c, me);
+  if (community instanceof Response) return community;
 
   const db = getDb(c.env);
-  // Scoped to this circle in the WHERE, so a membership id from somewhere else
-  // updates nothing rather than being approved into the wrong circle.
+  // Scoped to this community in the WHERE, so a membership id from somewhere else
+  // updates nothing rather than being approved into the wrong community.
   const [approved] = await db
-    .update(circleMembers)
+    .update(communityMembers)
     .set({ status: "approved" })
     .where(
-      and(eq(circleMembers.id, c.req.param("memberId")), eq(circleMembers.circleId, circle.id)),
+      and(eq(communityMembers.id, c.req.param("memberId")), eq(communityMembers.communityId, community.id)),
     )
-    .returning({ userId: circleMembers.userId });
+    .returning({ userId: communityMembers.userId });
 
   if (!approved) return c.json({ error: "Member not found" }, 404);
 
@@ -1573,8 +1573,8 @@ host.post("/host/circles/:slug/members/:memberId/approve", async (c) => {
   return redirectWith(
     c,
     me.session,
-    `${member?.name ?? "That member"} is in. They can buy a pass and book from now on.`,
-    `/host/circles/${circle.slug}`,
+    `${member?.name ?? "That member"} is in. They can buy a package and book from now on.`,
+    `/host/communities/${community.slug}`,
   );
 });
 

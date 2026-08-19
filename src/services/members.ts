@@ -1,5 +1,5 @@
 /**
- * The people in a circle, the people coming to a gathering, and one member's
+ * The people in a community, the people coming to an event, and one member's
  * own profile.
  *
  * Three rules the product cares about live here rather than in a template:
@@ -12,18 +12,18 @@ import { and, asc, eq, gte, sql } from "drizzle-orm";
 import { getDb, type DatabaseEnv } from "../db";
 import {
   bookings,
-  circleMembers,
-  circles,
+  communityMembers,
+  communities,
   events,
   users,
-  type CircleCategory,
+  type CommunityCategory,
   type MemberRole,
   type MembershipStatus,
 } from "../schema";
 import { boundLimit } from "./common";
 
-/** A member of a circle, as the members strip and the host console show them. */
-export interface CircleMemberProfile {
+/** A member of a community, as the members strip and the host console show them. */
+export interface CommunityMemberProfile {
   /** The `circle_members` row id — what the approve form posts to. */
   membershipId: string;
   userId: string;
@@ -34,7 +34,7 @@ export interface CircleMemberProfile {
   status: MembershipStatus;
 }
 
-/** Someone with a confirmed place at a gathering. */
+/** Someone with a confirmed place at an event. */
 export interface AttendeeProfile {
   userId: string;
   name: string;
@@ -42,74 +42,74 @@ export interface AttendeeProfile {
   city: string | null;
 }
 
-/** One line of "circles I have joined", for `/api/me` and `/account`. */
+/** One line of "communities I have joined", for `/api/me` and `/account`. */
 export interface MembershipSummary {
-  circleSlug: string;
-  circleName: string;
+  communitySlug: string;
+  communityName: string;
   status: MembershipStatus;
   role: MemberRole;
 }
 
 const profileColumns = {
-  membershipId: circleMembers.id,
+  membershipId: communityMembers.id,
   userId: users.id,
   name: users.name,
   headline: users.headline,
   city: users.city,
-  role: circleMembers.role,
-  status: circleMembers.status,
+  role: communityMembers.role,
+  status: communityMembers.status,
 };
 
 /** Host first, then in the order they joined. One `case` beats sorting in JS. */
-const hostFirst = sql`case when ${circleMembers.role} = ${"host"} then 0 else 1 end`;
+const hostFirst = sql`case when ${communityMembers.role} = ${"host"} then 0 else 1 end`;
 
 /**
- * The approved members of a circle — the public list. Never returns a pending
+ * The approved members of a community — the public list. Never returns a pending
  * or declined row, so a page cannot leak one by forgetting to filter.
  */
 export async function listApprovedMembers(
   env: DatabaseEnv,
-  circleId: string,
+  communityId: string,
   options: { limit?: number } = {},
-): Promise<CircleMemberProfile[]> {
+): Promise<CommunityMemberProfile[]> {
   const db = getDb(env);
   return db
     .select(profileColumns)
-    .from(circleMembers)
-    .innerJoin(users, eq(users.id, circleMembers.userId))
-    .where(and(eq(circleMembers.circleId, circleId), eq(circleMembers.status, "approved")))
-    .orderBy(asc(hostFirst), asc(circleMembers.createdAt))
+    .from(communityMembers)
+    .innerJoin(users, eq(users.id, communityMembers.userId))
+    .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.status, "approved")))
+    .orderBy(asc(hostFirst), asc(communityMembers.createdAt))
     .limit(boundLimit(options.limit));
 }
 
 /** The queue in the host console. Oldest request first — it has waited longest. */
 export async function listPendingMembers(
   env: DatabaseEnv,
-  circleId: string,
+  communityId: string,
   options: { limit?: number } = {},
-): Promise<CircleMemberProfile[]> {
+): Promise<CommunityMemberProfile[]> {
   const db = getDb(env);
   return db
     .select(profileColumns)
-    .from(circleMembers)
-    .innerJoin(users, eq(users.id, circleMembers.userId))
-    .where(and(eq(circleMembers.circleId, circleId), eq(circleMembers.status, "pending")))
-    .orderBy(asc(circleMembers.createdAt))
+    .from(communityMembers)
+    .innerJoin(users, eq(users.id, communityMembers.userId))
+    .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.status, "pending")))
+    .orderBy(asc(communityMembers.createdAt))
     .limit(boundLimit(options.limit));
 }
 
-/** One member's standing in one circle, or null if they have never asked. */
+/** One member's standing in one community, or null if they have never asked. */
 export async function getMembership(
   env: DatabaseEnv,
-  circleId: string,
+  communityId: string,
   userId: string,
-): Promise<CircleMemberProfile | null> {
+): Promise<CommunityMemberProfile | null> {
   const db = getDb(env);
   const [row] = await db
     .select(profileColumns)
-    .from(circleMembers)
-    .innerJoin(users, eq(users.id, circleMembers.userId))
-    .where(and(eq(circleMembers.circleId, circleId), eq(circleMembers.userId, userId)))
+    .from(communityMembers)
+    .innerJoin(users, eq(users.id, communityMembers.userId))
+    .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.userId, userId)))
     .limit(1);
   return row ?? null;
 }
@@ -138,7 +138,7 @@ export async function listEventAttendees(
     .limit(boundLimit(options.limit));
 }
 
-/** Every circle this member has a row in, pending ones included — it is their own list. */
+/** Every community this member has a row in, pending ones included — it is their own list. */
 export async function listMembershipsForUser(
   env: DatabaseEnv,
   userId: string,
@@ -147,15 +147,15 @@ export async function listMembershipsForUser(
   const db = getDb(env);
   return db
     .select({
-      circleSlug: circles.slug,
-      circleName: circles.name,
-      status: circleMembers.status,
-      role: circleMembers.role,
+      communitySlug: communities.slug,
+      communityName: communities.name,
+      status: communityMembers.status,
+      role: communityMembers.role,
     })
-    .from(circleMembers)
-    .innerJoin(circles, eq(circles.id, circleMembers.circleId))
-    .where(eq(circleMembers.userId, userId))
-    .orderBy(asc(circleMembers.createdAt))
+    .from(communityMembers)
+    .innerJoin(communities, eq(communities.id, communityMembers.communityId))
+    .where(eq(communityMembers.userId, userId))
+    .orderBy(asc(communityMembers.createdAt))
     .limit(boundLimit(options.limit));
 }
 
@@ -177,17 +177,17 @@ export interface MemberProfile {
   bio: string | null;
 }
 
-/** One circle a member belongs to, as their profile lists it. Approved only. */
-export interface MemberCircle {
+/** One community a member belongs to, as their profile lists it. Approved only. */
+export interface MemberCommunity {
   slug: string;
   name: string;
   tagline: string;
   city: string;
-  category: CircleCategory;
+  category: CommunityCategory;
   role: MemberRole;
 }
 
-/** A place this member holds at a gathering still to come. */
+/** A place this member holds at an event still to come. */
 export interface MemberEvent {
   slug: string;
   title: string;
@@ -195,8 +195,8 @@ export interface MemberEvent {
   city: string;
   /** ISO 8601, UTC. The renderer decides the time zone, not the query. */
   startsAt: string;
-  circleSlug: string;
-  circleName: string;
+  communitySlug: string;
+  communityName: string;
 }
 
 /** The four columns a member may change about themselves. */
@@ -232,39 +232,39 @@ export async function getMemberProfile(
 }
 
 /**
- * The circles this member is in — **approved only**. A pending request is
+ * The communities this member is in — **approved only**. A pending request is
  * between them and the host, and a public profile must not announce it.
  * `listMembershipsForUser` above is the member's own list and does include
  * pending ones; the two are not interchangeable.
  */
-export async function listApprovedCirclesForMember(
+export async function listApprovedCommunitiesForMember(
   env: DatabaseEnv,
   userId: string,
   options: { limit?: number } = {},
-): Promise<MemberCircle[]> {
+): Promise<MemberCommunity[]> {
   const db = getDb(env);
   return db
     .select({
-      slug: circles.slug,
-      name: circles.name,
-      tagline: circles.tagline,
-      city: circles.city,
-      category: circles.category,
-      role: circleMembers.role,
+      slug: communities.slug,
+      name: communities.name,
+      tagline: communities.tagline,
+      city: communities.city,
+      category: communities.category,
+      role: communityMembers.role,
     })
-    .from(circleMembers)
-    .innerJoin(circles, eq(circles.id, circleMembers.circleId))
-    .where(and(eq(circleMembers.userId, userId), eq(circleMembers.status, "approved")))
-    // Circles they run first, then in the order they joined — the same
+    .from(communityMembers)
+    .innerJoin(communities, eq(communities.id, communityMembers.communityId))
+    .where(and(eq(communityMembers.userId, userId), eq(communityMembers.status, "approved")))
+    // Communities they run first, then in the order they joined — the same
     // ordering the members strip uses, for the same reason.
-    .orderBy(asc(hostFirst), asc(circleMembers.createdAt))
+    .orderBy(asc(hostFirst), asc(communityMembers.createdAt))
     .limit(boundLimit(options.limit));
 }
 
 /**
- * Gatherings this member is going to: confirmed bookings on published dates
+ * Events this member is going to: confirmed bookings on published dates
  * that have not happened yet, soonest first. A cancelled booking and a draft
- * gathering both drop out in SQL rather than in the template.
+ * event both drop out in SQL rather than in the template.
  */
 export async function listUpcomingEventsForMember(
   env: DatabaseEnv,
@@ -280,12 +280,12 @@ export async function listUpcomingEventsForMember(
       venue: events.venue,
       city: events.city,
       startsAt: events.startsAt,
-      circleSlug: circles.slug,
-      circleName: circles.name,
+      communitySlug: communities.slug,
+      communityName: communities.name,
     })
     .from(bookings)
     .innerJoin(events, eq(events.id, bookings.eventId))
-    .innerJoin(circles, eq(circles.id, events.circleId))
+    .innerJoin(communities, eq(communities.id, events.communityId))
     .where(
       and(
         eq(bookings.userId, userId),

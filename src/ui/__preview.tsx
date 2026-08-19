@@ -7,12 +7,12 @@
  * `renderPreview()`.
  *
  * The copy here follows §6 — named people, a cadence, a physical specific and
- * one constraint per circle; real minutes; prices with their derivation; none
+ * one constraint per community; real minutes; prices with their derivation; none
  * of the banned words. It is dummy data that a designer can judge.
  */
 
 import { Hono } from "hono";
-import { ActionArea, ActionBar, CheckoutSummary, CreditSquares, PassTable, TicketPlate, type ActionState, type PassOffer } from "./booking";
+import { ActionArea, ActionBar, CheckoutSummary, TicketSquares, PackageTable, TicketPlate, type ActionState, type PackageChoice } from "./booking";
 import { CalendarMonth, Ledger, type CalendarDay, type CalendarEntry, type LedgerGroup } from "./calendar";
 import {
   Alert,
@@ -20,7 +20,7 @@ import {
   Badge,
   Button,
   CardGrid,
-  CircleCard,
+  CommunityCard,
   Container,
   Divider,
   EmptyState,
@@ -29,8 +29,8 @@ import {
   FilterRow,
   Hero,
   Meta,
-  PassCard,
-  PassGrid,
+  PackageCard,
+  PackageGrid,
   Plate,
   Section,
   SectionIndex,
@@ -42,7 +42,7 @@ import { AttendeeList, MemberList, type PersonEntry } from "./people";
 
 /* ---------- data ---------- */
 
-const CIRCLES = [
+const COMMUNITIES = [
   {
     slug: "adriatic-sailing-society",
     name: "Adriatic Sailing Society",
@@ -102,7 +102,7 @@ const EVENT_CARDS = [
   {
     slug: "hvar-crossing-august",
     title: "The Hvar crossing",
-    circleName: "Adriatic Sailing Society",
+    communityName: "Adriatic Sailing Society",
     category: "sailing",
     city: "Split",
     venue: "ACI Marina, pontoon D",
@@ -112,7 +112,7 @@ const EVENT_CARDS = [
   {
     slug: "pump-house-tuesday",
     title: "Tuesday in the pump house",
-    circleName: "The Cold Room",
+    communityName: "The Cold Room",
     category: "wellness",
     city: "Stockholm",
     venue: "Hornstulls pumphus",
@@ -122,7 +122,7 @@ const EVENT_CARDS = [
   {
     slug: "alfama-long-table",
     title: "The long table, Alfama",
-    circleName: "Table Nineteen",
+    communityName: "Table Nineteen",
     category: "dining",
     city: "Lisbon",
     venue: "Rua dos Remédios 42",
@@ -166,32 +166,32 @@ const ATTENDEES: PersonEntry[] = [
 ];
 
 /** Season is not exactly 6× Single (§6). */
-const PASSES: PassOffer[] = [
+const PACKAGES: PackageChoice[] = [
   {
     id: "single",
     name: "Single",
-    credits: 1,
+    tickets: 1,
     price: "€70",
-    derivation: "1 gathering · €70 each",
-    href: "/circles/the-cold-room/passes/single/checkout",
+    derivation: "1 event · €70 each",
+    href: "/communities/the-cold-room/packages/single/checkout",
     cta: "Take one",
   },
   {
     id: "trio",
     name: "Trio",
-    credits: 3,
+    tickets: 3,
     price: "€180",
-    derivation: "3 gatherings · €60 each",
-    href: "/circles/the-cold-room/passes/trio/checkout",
+    derivation: "3 events · €60 each",
+    href: "/communities/the-cold-room/packages/trio/checkout",
     cta: "Take the Trio",
   },
   {
     id: "season",
     name: "Season",
-    credits: 6,
+    tickets: 6,
     price: "€330",
-    derivation: "6 gatherings · €55 each",
-    href: "/circles/the-cold-room/passes/season/checkout",
+    derivation: "6 events · €55 each",
+    href: "/communities/the-cold-room/packages/season/checkout",
     cta: "Take the Season",
   },
 ];
@@ -200,30 +200,30 @@ const LEDGER: LedgerGroup[] = [
   {
     month: "August 2026",
     entries: [
-      { slug: "hvar-crossing-august", title: "The Hvar crossing", circleName: "Adriatic Sailing Society", venue: "ACI Marina", city: "Split", category: "sailing", dayLabel: "Sat 22", monthLabel: "Aug", timeLabel: "06:40–17:20", placesLeft: 3 },
-      { slug: "pump-house-tuesday", title: "Tuesday in the pump house", circleName: "The Cold Room", venue: "Hornstulls pumphus", city: "Stockholm", category: "wellness", dayLabel: "Tue 25", monthLabel: "Aug", timeLabel: "06:30–08:05", placesLeft: 1 },
-      { slug: "clay-before-heat", title: "Clay before the heat", circleName: "Court Nine", venue: "Club Deportivo", city: "Valencia", category: "sport", dayLabel: "Tue 25", monthLabel: "Aug", timeLabel: "06:40–08:40", placesLeft: 6 },
-      { slug: "alfama-long-table", title: "The long table, Alfama", circleName: "Table Nineteen", venue: "Rua dos Remédios 42", city: "Lisbon", category: "dining", dayLabel: "Fri 28", monthLabel: "Aug", timeLabel: "20:30–23:45", placesLeft: 0 },
-      { slug: "nautholsvik-line", title: "The Nauthólsvík line", circleName: "Nauthólsvík", venue: "Nauthólsvík beach", city: "Reykjavík", category: "wellness", dayLabel: "Sat 29", monthLabel: "Aug", timeLabel: "08:15–09:25", placesLeft: 11 },
-      { slug: "copperplate-thursday", title: "Copperplate Thursday", circleName: "The Etching Room", venue: "Nørrebrogade 214", city: "Copenhagen", category: "art", dayLabel: "Sun 30", monthLabel: "Aug", timeLabel: "14:10–18:00", placesLeft: 2 },
+      { slug: "hvar-crossing-august", title: "The Hvar crossing", communityName: "Adriatic Sailing Society", venue: "ACI Marina", city: "Split", category: "sailing", dayLabel: "Sat 22", monthLabel: "Aug", timeLabel: "06:40–17:20", placesLeft: 3 },
+      { slug: "pump-house-tuesday", title: "Tuesday in the pump house", communityName: "The Cold Room", venue: "Hornstulls pumphus", city: "Stockholm", category: "wellness", dayLabel: "Tue 25", monthLabel: "Aug", timeLabel: "06:30–08:05", placesLeft: 1 },
+      { slug: "clay-before-heat", title: "Clay before the heat", communityName: "Court Nine", venue: "Club Deportivo", city: "Valencia", category: "sport", dayLabel: "Tue 25", monthLabel: "Aug", timeLabel: "06:40–08:40", placesLeft: 6 },
+      { slug: "alfama-long-table", title: "The long table, Alfama", communityName: "Table Nineteen", venue: "Rua dos Remédios 42", city: "Lisbon", category: "dining", dayLabel: "Fri 28", monthLabel: "Aug", timeLabel: "20:30–23:45", placesLeft: 0 },
+      { slug: "nautholsvik-line", title: "The Nauthólsvík line", communityName: "Nauthólsvík", venue: "Nauthólsvík beach", city: "Reykjavík", category: "wellness", dayLabel: "Sat 29", monthLabel: "Aug", timeLabel: "08:15–09:25", placesLeft: 11 },
+      { slug: "copperplate-thursday", title: "Copperplate Thursday", communityName: "The Etching Room", venue: "Nørrebrogade 214", city: "Copenhagen", category: "art", dayLabel: "Sun 30", monthLabel: "Aug", timeLabel: "14:10–18:00", placesLeft: 2 },
     ],
   },
   {
     month: "September 2026",
     entries: [
-      { slug: "vis-overnight", title: "Overnight to Vis", circleName: "Adriatic Sailing Society", venue: "ACI Marina", city: "Split", category: "sailing", dayLabel: "Fri 04", monthLabel: "Sep", timeLabel: "17:05–11:30", placesLeft: 4 },
-      { slug: "september-cold-round", title: "The September round", circleName: "The Cold Room", venue: "Hornstulls pumphus", city: "Stockholm", category: "wellness", dayLabel: "Tue 08", monthLabel: "Sep", timeLabel: "06:30–08:05", placesLeft: 9 },
-      { slug: "nineteen-for-figs", title: "Nineteen, for the figs", circleName: "Table Nineteen", venue: "Rua dos Remédios 42", city: "Lisbon", category: "dining", dayLabel: "Fri 11", monthLabel: "Sep", timeLabel: "20:30–23:50", placesLeft: 5 },
-      { slug: "drypoint-evening", title: "Drypoint evening", circleName: "The Etching Room", venue: "Nørrebrogade 214", city: "Copenhagen", category: "art", dayLabel: "Thu 17", monthLabel: "Sep", timeLabel: "18:20–21:40", placesLeft: 1 },
-      { slug: "doubles-ladder", title: "The doubles ladder", circleName: "Court Nine", venue: "Club Deportivo", city: "Valencia", category: "sport", dayLabel: "Tue 22", monthLabel: "Sep", timeLabel: "06:40–08:40", placesLeft: 8 },
+      { slug: "vis-overnight", title: "Overnight to Vis", communityName: "Adriatic Sailing Society", venue: "ACI Marina", city: "Split", category: "sailing", dayLabel: "Fri 04", monthLabel: "Sep", timeLabel: "17:05–11:30", placesLeft: 4 },
+      { slug: "september-cold-round", title: "The September round", communityName: "The Cold Room", venue: "Hornstulls pumphus", city: "Stockholm", category: "wellness", dayLabel: "Tue 08", monthLabel: "Sep", timeLabel: "06:30–08:05", placesLeft: 9 },
+      { slug: "nineteen-for-figs", title: "Nineteen, for the figs", communityName: "Table Nineteen", venue: "Rua dos Remédios 42", city: "Lisbon", category: "dining", dayLabel: "Fri 11", monthLabel: "Sep", timeLabel: "20:30–23:50", placesLeft: 5 },
+      { slug: "drypoint-evening", title: "Drypoint evening", communityName: "The Etching Room", venue: "Nørrebrogade 214", city: "Copenhagen", category: "art", dayLabel: "Thu 17", monthLabel: "Sep", timeLabel: "18:20–21:40", placesLeft: 1 },
+      { slug: "doubles-ladder", title: "The doubles ladder", communityName: "Court Nine", venue: "Club Deportivo", city: "Valencia", category: "sport", dayLabel: "Tue 22", monthLabel: "Sep", timeLabel: "06:40–08:40", placesLeft: 8 },
     ],
   },
   {
     month: "November 2026",
     entries: [
-      { slug: "first-frost-swim", title: "First frost swim", circleName: "Nauthólsvík", venue: "Nauthólsvík beach", city: "Reykjavík", category: "wellness", dayLabel: "Sat 07", monthLabel: "Nov", timeLabel: "08:15–09:20", placesLeft: 14 },
-      { slug: "winter-plates", title: "Winter plates", circleName: "The Etching Room", venue: "Nørrebrogade 214", city: "Copenhagen", category: "art", dayLabel: "Thu 19", monthLabel: "Nov", timeLabel: "18:20–21:35", placesLeft: 3 },
-      { slug: "laying-up-day", title: "Laying-up day", circleName: "Adriatic Sailing Society", venue: "Brodarica yard", city: "Split", category: "sailing", dayLabel: "Sat 28", monthLabel: "Nov", timeLabel: "09:20–15:00", placesLeft: 7 },
+      { slug: "first-frost-swim", title: "First frost swim", communityName: "Nauthólsvík", venue: "Nauthólsvík beach", city: "Reykjavík", category: "wellness", dayLabel: "Sat 07", monthLabel: "Nov", timeLabel: "08:15–09:20", placesLeft: 14 },
+      { slug: "winter-plates", title: "Winter plates", communityName: "The Etching Room", venue: "Nørrebrogade 214", city: "Copenhagen", category: "art", dayLabel: "Thu 19", monthLabel: "Nov", timeLabel: "18:20–21:35", placesLeft: 3 },
+      { slug: "laying-up-day", title: "Laying-up day", communityName: "Adriatic Sailing Society", venue: "Brodarica yard", city: "Split", category: "sailing", dayLabel: "Sat 28", monthLabel: "Nov", timeLabel: "09:20–15:00", placesLeft: 7 },
     ],
   },
 ];
@@ -288,11 +288,11 @@ function buildMonth(year: number, month: number): CalendarDay[][] {
 
 const STATES: { label: string; state: ActionState; placesLeft: number }[] = [
   { label: "1 · Signed out", placesLeft: 4, state: { kind: "signed-out", joinHref: "/join?next=/events/pump-house-tuesday" } },
-  { label: "2 · Not a member, public circle", placesLeft: 4, state: { kind: "join-public", passes: PASSES } },
-  { label: "3 · Not a member, private circle", placesLeft: 4, state: { kind: "join-private", requestAction: "/circles/the-cold-room/join", next: "/events/pump-house-tuesday" } },
+  { label: "2 · Not a member, public community", placesLeft: 4, state: { kind: "join-public", packages: PACKAGES } },
+  { label: "3 · Not a member, private community", placesLeft: 4, state: { kind: "join-private", requestAction: "/communities/the-cold-room/join", next: "/events/pump-house-tuesday" } },
   { label: "4 · Pending approval", placesLeft: 4, state: { kind: "pending", hostFirstName: "Tomas" } },
-  { label: "5 · Member, no credits", placesLeft: 4, state: { kind: "no-credits", passes: PASSES } },
-  { label: "6 · Member, has credits", placesLeft: 4, state: { kind: "ready", bookAction: "/events/pump-house-tuesday/book", creditsLeft: 3, creditsTotal: 3 } },
+  { label: "5 · Member, no tickets", placesLeft: 4, state: { kind: "no-tickets", packages: PACKAGES } },
+  { label: "6 · Member, has tickets", placesLeft: 4, state: { kind: "ready", bookAction: "/events/pump-house-tuesday/book", ticketsLeft: 3, ticketsTotal: 3 } },
   { label: "7 · Already booked", placesLeft: 3, state: { kind: "booked", code: "2CC-K7QF-2M", ticketHref: "/account/tickets/2CC-K7QF-2M" } },
   {
     label: "8 · Full",
@@ -309,9 +309,9 @@ function PreviewPage() {
       title="Design system"
       description="Every 2CC component on one page, with dummy data."
       user={{ name: "Amara Okonjo" }}
-      active="circles"
+      active="communities"
       actionBar={
-        <ActionBar title="Tuesday in the pump house" note="1 credit · 1 place left">
+        <ActionBar title="Tuesday in the pump house" note="1 ticket · 1 place left">
           <Button href="#action-area" variant="primary">
             Confirm your place
           </Button>
@@ -339,23 +339,23 @@ function PreviewPage() {
         </Button>
       </Hero>
 
-      <Section index={2} label="Circles" title="Six plates, side by side" id="plates" action={{ href: "/circles", label: "All circles" }}>
+      <Section index={2} label="Communities" title="Six plates, side by side" id="plates" action={{ href: "/communities", label: "All communities" }}>
         <div style="margin-block-end:32px">
           <FilterRow
             label="Category"
             options={[
-              { label: "All", href: "/circles", current: true },
-              { label: "Sailing", href: "/circles?category=sailing" },
-              { label: "Wellness", href: "/circles?category=wellness" },
-              { label: "Dining", href: "/circles?category=dining" },
-              { label: "Sport", href: "/circles?category=sport" },
-              { label: "Art", href: "/circles?category=art" },
+              { label: "All", href: "/communities", current: true },
+              { label: "Sailing", href: "/communities?category=sailing" },
+              { label: "Wellness", href: "/communities?category=wellness" },
+              { label: "Dining", href: "/communities?category=dining" },
+              { label: "Sport", href: "/communities?category=sport" },
+              { label: "Art", href: "/communities?category=art" },
             ]}
           />
         </div>
         <CardGrid>
-          {CIRCLES.map((c) => (
-            <CircleCard
+          {COMMUNITIES.map((c) => (
+            <CommunityCard
               slug={c.slug}
               name={c.name}
               tagline={c.tagline}
@@ -368,13 +368,13 @@ function PreviewPage() {
         </CardGrid>
       </Section>
 
-      <Section index={3} label="Gatherings" title="Cards, and the hero plate">
+      <Section index={3} label="Events" title="Cards, and the hero plate">
         <CardGrid wide={true}>
           {EVENT_CARDS.map((e) => (
             <EventCard
               slug={e.slug}
               title={e.title}
-              circleName={e.circleName}
+              communityName={e.communityName}
               city={e.city}
               venue={e.venue}
               when={e.when}
@@ -400,8 +400,8 @@ function PreviewPage() {
         <Gallery label="The Cold Room, archive" category="wellness" items={GALLERY} />
       </Section>
 
-      <Section index={5} label="Members" title="Who is in this circle">
-        <MemberList members={MEMBERS} host={HOST} total={31} moreHref="/circles/the-cold-room#members" />
+      <Section index={5} label="Members" title="Who is in this community">
+        <MemberList members={MEMBERS} host={HOST} total={31} moreHref="/communities/the-cold-room#members" />
       </Section>
 
       <Section index={6} label="Attendees" title="Who is coming">
@@ -418,7 +418,7 @@ function PreviewPage() {
         </div>
       </Section>
 
-      <Section index={7} label="The ledger" title="Gatherings, as a ledger" action={{ href: "/events", label: "All gatherings" }}>
+      <Section index={7} label="The ledger" title="Events, as a ledger" action={{ href: "/events", label: "All events" }}>
         <Ledger groups={LEDGER} />
       </Section>
 
@@ -436,30 +436,30 @@ function PreviewPage() {
         />
       </Section>
 
-      <Section index={9} label="Passes" title="One table, not three cards">
-        <PassTable passes={PASSES} caption="The three passes for The Cold Room" />
+      <Section index={9} label="Packages" title="One table, not three cards">
+        <PackageTable packages={PACKAGES} caption="The three packages for The Cold Room" />
 
         <h3 class="h-card" style="margin-block-start:48px">
-          Passes you hold
+          Packages you hold
         </h3>
         <div style="margin-block-start:16px">
-          <PassGrid>
-            <PassCard name="Trio" credits={3} price="€180" derivation="3 gatherings · €60 each" note="The Cold Room">
+          <PackageGrid>
+            <PackageCard name="Trio" tickets={3} price="€180" derivation="3 events · €60 each" note="The Cold Room">
               <div style="margin-block-start:16px">
-                <CreditSquares total={3} used={1} />
+                <TicketSquares total={3} used={1} />
               </div>
-            </PassCard>
-            <PassCard name="Season" credits={6} price="€330" derivation="6 gatherings · €55 each" note="Court Nine">
+            </PackageCard>
+            <PackageCard name="Season" tickets={6} price="€330" derivation="6 events · €55 each" note="Court Nine">
               <div style="margin-block-start:16px">
-                <CreditSquares total={6} used={4} />
+                <TicketSquares total={6} used={4} />
               </div>
-            </PassCard>
-            <PassCard name="Single" credits={1} price="€70" derivation="1 gathering · €70 each" note="Table Nineteen">
+            </PackageCard>
+            <PackageCard name="Single" tickets={1} price="€70" derivation="1 event · €70 each" note="Table Nineteen">
               <div style="margin-block-start:16px">
-                <CreditSquares total={1} used={1} />
+                <TicketSquares total={1} used={1} />
               </div>
-            </PassCard>
-          </PassGrid>
+            </PackageCard>
+          </PackageGrid>
         </div>
       </Section>
 
@@ -471,7 +471,7 @@ function PreviewPage() {
                 {s.label}
               </p>
               <ActionArea
-                circle={{ slug: "the-cold-room", name: "The Cold Room" }}
+                community={{ slug: "the-cold-room", name: "The Cold Room" }}
                 placesLeft={s.placesLeft}
                 capacity={12}
                 state={s.state}
@@ -483,12 +483,12 @@ function PreviewPage() {
 
       <Section index={11} label="Checkout" title="The mock payment step">
         <CheckoutSummary
-          circleName="The Cold Room"
-          passName="Season"
-          credits={6}
+          communityName="The Cold Room"
+          packageName="Season"
+          tickets={6}
           price="€330"
-          perGathering="6 gatherings · €55 each"
-          action="/circles/the-cold-room/passes/season/buy"
+          perEvent="6 events · €55 each"
+          action="/communities/the-cold-room/packages/season/buy"
           nonce="7f3a91c0d2"
           next="/events/pump-house-tuesday"
         />
@@ -499,11 +499,11 @@ function PreviewPage() {
           seed="pump-house-tuesday"
           code="2CC-K7QF-2M"
           title="Tuesday in the pump house"
-          circleName="The Cold Room"
+          communityName="The Cold Room"
           when="Tue 25 Aug · 06:30–08:05"
           venue="Hornstulls pumphus"
           address="Bergsunds strand 33, 117 38 Stockholm"
-          passName="Trio · 2 credits left"
+          packageName="Trio · 2 tickets left"
           bring="Towel, sandals, no phone"
           cancelBy="Mon 24 Aug · 18:00"
         />
@@ -511,7 +511,7 @@ function PreviewPage() {
 
       <Section index={13} label="Small pieces" title="The rest of the kit">
         <div class="stack stack--wide">
-          <SectionIndex index="03" label="Gatherings" />
+          <SectionIndex index="03" label="Events" />
 
           <p class="prose">
             Buttons, status text, metadata, stats and the avatar, shown together so a regression is
@@ -524,10 +524,10 @@ function PreviewPage() {
               Confirm your place
             </Button>
             <Button variant="ghost" type="button">
-              Request an invitation
+              Ask the host to join
             </Button>
             <Button variant="quiet" href="/events">
-              All gatherings
+              All events
             </Button>
             <Button variant="ghost" disabled={true}>
               Full
@@ -554,10 +554,10 @@ function PreviewPage() {
           <Divider />
 
           <div class="stack">
-            <Alert tone="brass">One credit will be spent when you confirm this booking.</Alert>
+            <Alert tone="brass">One ticket will be spent when you confirm this booking.</Alert>
             <Alert>Your request to join The Cold Room is with Tomas.</Alert>
-            <Alert tone="warn">One place left. Cancelling after Monday 18:00 keeps the credit spent.</Alert>
-            <Alert tone="rust">That gathering is full. Nothing was charged.</Alert>
+            <Alert tone="warn">One place left. Cancelling after Monday 18:00 keeps the ticket spent.</Alert>
+            <Alert tone="rust">That event is full. Nothing was charged.</Alert>
           </div>
 
           <Divider />
@@ -610,9 +610,9 @@ function PreviewPage() {
           <Divider />
 
           <EmptyState
-            title="No gatherings scheduled"
+            title="No events scheduled"
             note="Tomas posts the winter calendar in October."
-            action={{ href: "/circles", label: "Other circles" }}
+            action={{ href: "/communities", label: "Other communities" }}
           />
         </div>
       </Section>

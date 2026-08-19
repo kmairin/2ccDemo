@@ -127,6 +127,7 @@ async function asProduction(): Promise<void> {
  */
 const drain = () => new Promise((r) => setTimeout(r, 2_000));
 
+/** `table` is the SQL name, which the vocabulary rename left alone (src/schema.ts). */
 const rows = async (table: string): Promise<number> =>
   Number((await client.unsafe(`select count(*)::int as n from ${table}`))[0].n);
 

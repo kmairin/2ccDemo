@@ -2,14 +2,14 @@
  * The pieces every service in this folder shares: the row cap, and the two
  * counts the product keeps quoting back at people.
  *
- * `placesLeft` and `memberCount` appear on the directory, the circle page, the
- * gathering page and the host console. They are defined once, here, because a
+ * `placesLeft` and `memberCount` appear on the directory, the community page, the
+ * event page and the host console. They are defined once, here, because a
  * number that disagrees with itself across two pages is the kind of bug nobody
  * reports and everybody notices.
  */
 import { and, eq, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { QueryBuilder } from "drizzle-orm/pg-core";
-import { bookings, circleMembers, events } from "../schema";
+import { bookings, communityMembers, events } from "../schema";
 
 /**
  * A dialect-only query builder: it compiles SQL and never connects to anything.
@@ -43,14 +43,14 @@ export function boundLimit(limit?: number): number {
  *
  * Interpolating a Column into a `sql` template inside a `.select()` field list
  * makes Drizzle emit it **unqualified** when the surrounding query has a single
- * table, so `where ${circleMembers.circleId} = ${circles.id}` compiles to
+ * table, so `where ${communityMembers.communityId} = ${communities.id}` compiles to
  * `where "circle_id" = "id"` — and inside the subquery both bare names then
  * resolve against `circle_members`. Every row compares its own `circle_id` to
  * its own `id`, which is never true, so the count is 0 with no error anywhere.
- * That is exactly what it did: 0 members and 0 gatherings on every circle.
+ * That is exactly what it did: 0 members and 0 events on every community.
  *
  * Built through `qb` the same correlation compiles to
- * `"circle_members"."circle_id" = "circles"."id"` whether or not the outer
+ * `"circle_members"."circle_id" = "communities"."id"` whether or not the outer
  * query joins — the qualification comes from the builder rather than from
  * guessing the outer query's shape. `test/service-count-sql.test.ts` pins it.
  *
@@ -58,7 +58,7 @@ export function boundLimit(limit?: number): number {
  * a string; `mapWith(Number)` makes that impossible to observe either way.
  */
 
-/** Confirmed bookings against one gathering. */
+/** Confirmed bookings against one event. */
 export function confirmedBookingCount(eventId: AnyColumn): SQL<number> {
   const sub = qb
     .select({ n: sql`count(*)::int` })
@@ -67,21 +67,21 @@ export function confirmedBookingCount(eventId: AnyColumn): SQL<number> {
   return sql<number>`(${sub})`.mapWith(Number);
 }
 
-/** Approved members of one circle — the host's row included, it is a member row too. */
-export function approvedMemberCount(circleId: AnyColumn): SQL<number> {
+/** Approved members of one community — the host's row included, it is a member row too. */
+export function approvedMemberCount(communityId: AnyColumn): SQL<number> {
   const sub = qb
     .select({ n: sql`count(*)::int` })
-    .from(circleMembers)
-    .where(and(eq(circleMembers.circleId, circleId), eq(circleMembers.status, "approved")));
+    .from(communityMembers)
+    .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.status, "approved")));
   return sql<number>`(${sub})`.mapWith(Number);
 }
 
-/** Published gatherings of one circle. Drafts are invisible to members. */
-export function publishedEventCount(circleId: AnyColumn): SQL<number> {
+/** Published events of one community. Drafts are invisible to members. */
+export function publishedEventCount(communityId: AnyColumn): SQL<number> {
   const sub = qb
     .select({ n: sql`count(*)::int` })
     .from(events)
-    .where(and(eq(events.circleId, circleId), eq(events.status, "published")));
+    .where(and(eq(events.communityId, communityId), eq(events.status, "published")));
   return sql<number>`(${sub})`.mapWith(Number);
 }
 
@@ -136,11 +136,11 @@ export function likeContains(value: string): string {
  * filters, the city and country pages and the search — for the same reason
  * `placesLeft` has one definition. Both are deliberately literal:
  *
- *   - a **circle** is in the city and country its own columns name;
- *   - a **gathering** is in the city its own column names, and in the country
- *     of the circle that runs it (`events` has no country of its own).
+ *   - a **community** is in the city and country its own columns name;
+ *   - a **event** is in the city its own column names, and in the country
+ *     of the community that runs it (`events` has no country of its own).
  *
- * So a Monaco circle sailing out of Cap-d'Ail lists that gathering under
+ * So a Monaco community sailing out of Cap-d'Ail lists that event under
  * Cap-d'Ail, which is where it actually is, and under Monaco the country.
  * Every count on a page then equals the rows printed under it.
  */

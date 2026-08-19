@@ -5,8 +5,8 @@
  *
  * so the paths declared here are the contract's URLs
  * (`design/reference/api-contract.md`). Seven pages and three mutations: the
- * landing, the directory, one circle, the ledger of gatherings, one gathering,
- * the calendar, the join form, and sign in / sign out / join a circle.
+ * landing, the directory, one community, the ledger of events, one event,
+ * the calendar, the join form, and sign in / sign out / join a community.
  *
  * Handlers stay thin (AGENTS.md §8): validate what crossed the network, call a
  * service in `src/services/`, hand the rows to a component. Nothing here writes
@@ -41,29 +41,29 @@ import { getDb } from "../db";
 import { plural, placeLabel, formatDateRange, formatDay, formatMoney, formatTime } from "../lib/format";
 import { newId } from "../lib/ids";
 import {
-  CIRCLE_CATEGORIES,
-  circleMembers,
-  type CircleCategory,
+  COMMUNITY_CATEGORIES,
+  communityMembers,
+  type CommunityCategory,
   type MembershipStatus,
 } from "../schema";
 import {
-  getCircleBySlug,
+  getCommunityBySlug,
   getCity,
   getCountry,
-  isCircleHost,
-  listCirclePhotos,
-  listCircles,
+  isCommunityHost,
+  listCommunityPhotos,
+  listCommunities,
   listCities,
   listCountries,
-  searchCircles,
+  searchCommunities,
   type CitySummary,
   type CountrySummary,
-} from "../services/circles";
+} from "../services/communities";
 import { SEARCH_MAX_LENGTH, utcDateKey } from "../services/common";
 import {
   listBookingsForUser,
   listPackages,
-  listPassesForUser,
+  listPackagesForUser,
   type PackageOffer,
 } from "../services/commerce";
 import {
@@ -72,20 +72,20 @@ import {
   listCalendarMonth,
   listEventPhotos,
   listEvents,
-  listEventsForCircle,
+  listEventsForCommunity,
   parseMonth,
   searchEvents,
   type CalendarDay as CalendarSource,
   type EventSummary,
 } from "../services/events";
 import { getMembership, listApprovedMembers, listEventAttendees } from "../services/members";
-import { ActionArea, ActionBar, PassTable, type ActionState, type PassOffer } from "../ui/booking";
+import { ActionArea, ActionBar, PackageTable, type ActionState, type PackageChoice } from "../ui/booking";
 import { CalendarMonth, Ledger, type CalendarDay, type LedgerGroup } from "../ui/calendar";
 import {
   Alert,
   Button,
   CardGrid,
-  CircleCard,
+  CommunityCard,
   Container,
   EmptyState,
   EventCard,
@@ -201,24 +201,24 @@ function splitDay(d: Date): { dayLabel: string; monthLabel: string; weekday: str
   };
 }
 
-/** Gatherings that have not started yet, in the order the service returned them. */
+/** Events that have not started yet, in the order the service returned them. */
 function upcoming(events: EventSummary[], now: Date): EventSummary[] {
   return events.filter((e) => new Date(e.startsAt).getTime() >= now.getTime());
 }
 
-/** `€180` and the derivation `3 gatherings · €60 each`. Never "from" (§6). */
-function toPassOffers(circleSlug: string, offers: PackageOffer[], next?: string): PassOffer[] {
+/** `€180` and the derivation `3 events · €60 each`. Never "from" (§6). */
+function toPackageChoices(communitySlug: string, offers: PackageOffer[], next?: string): PackageChoice[] {
   const query = next === undefined ? "" : `?next=${encodeURIComponent(next)}`;
   return offers.map((p) => ({
     id: p.id,
     name: p.name,
-    credits: p.credits,
+    tickets: p.tickets,
     price: formatMoney(p.priceCents, p.currency),
     derivation:
-      p.credits === 1
-        ? "1 gathering"
-        : `${p.credits} gatherings · ${formatMoney(Math.round(p.priceCents / p.credits), p.currency)} each`,
-    href: `/circles/${circleSlug}/passes/${p.id}/checkout${query}`,
+      p.tickets === 1
+        ? "1 event"
+        : `${p.tickets} events · ${formatMoney(Math.round(p.priceCents / p.tickets), p.currency)} each`,
+    href: `/communities/${communitySlug}/packages/${p.id}/checkout${query}`,
   }));
 }
 
@@ -257,11 +257,11 @@ function notFoundPage(
       <Hero index="00" label="Not found" title={subject} lede={note} />
       <Section index={1} label="Elsewhere" title="Where to go instead">
         <div class="row">
-          <Button href="/circles" variant="ghost">
-            The circles
+          <Button href="/communities" variant="ghost">
+            The communities
           </Button>
           <Button href="/events" variant="ghost">
-            Every gathering
+            Every event
           </Button>
         </div>
       </Section>
@@ -275,14 +275,14 @@ function notFoundPage(
 pages.get("/", async (c) => {
   const me = await currentUser(c);
   const flash = await readFlash(c, me);
-  const [circles, events] = await Promise.all([listCircles(c.env), listEvents(c.env)]);
+  const [communities, events] = await Promise.all([listCommunities(c.env), listEvents(c.env)]);
   const next = upcoming(events, new Date()).slice(0, 4);
 
   pageHeaders(c);
   return c.html(
     <Layout
-      title={pageTitle("By invitation", flash)}
-      description="Circles that meet on a date, at an address, with a limit on how many people can come."
+      title={pageTitle("Communities and events worldwide", flash)}
+      description="Communities that meet on a date, at an address, with a limit on how many people can come."
       user={layoutUser(me)}
     >
       <FlashBanner flash={flash} />
@@ -291,21 +291,21 @@ pages.get("/", async (c) => {
           that defines all four nouns in one breath. */}
       <Hero
         scale="hero"
-        title="Every gathering here has a date, an address, and a limit on how many people can come."
-        lede="A circle is a standing group with a host and a place. A gathering is one dated meeting of it. A pass buys 1, 3 or 6 credits for one circle, and one credit takes one place."
+        title="Every event here has a date, an address, and a limit on how many people can come."
+        lede="A community is a standing group with a host and a place. An event is one dated meeting of it. A package buys 1, 3 or 6 tickets for one community, and one ticket takes one place."
       />
 
       {/* The date and the places left are what a traveller wants, so the
-          gatherings sit above the circles. */}
+          events sit above the communities. */}
       <Section
         index={1}
         label="Next"
-        title="The next gatherings"
-        action={{ href: "/events", label: "Every gathering" }}
+        title="The next events"
+        action={{ href: "/events", label: "Every event" }}
       >
         {next.length === 0 ? (
           <EmptyState
-            title="No gatherings scheduled."
+            title="No events scheduled."
             note="Hosts post their dates a season ahead. The calendar keeps the months either side."
             action={{ href: "/calendar", label: "Open the calendar" }}
           />
@@ -315,7 +315,7 @@ pages.get("/", async (c) => {
               <EventCard
                 slug={e.slug} coverKey={e.coverKey}
                 title={e.title}
-                circleName={e.circle.name}
+                communityName={e.community.name}
                 city={e.city}
                 venue={e.venue}
                 when={formatDateRange(new Date(e.startsAt), new Date(e.endsAt))}
@@ -328,30 +328,30 @@ pages.get("/", async (c) => {
 
       <Section
         index={2}
-        label="Circles"
-        title="The circles"
-        action={{ href: "/circles", label: "The directory" }}
+        label="Communities"
+        title="The communities"
+        action={{ href: "/communities", label: "The directory" }}
       >
         <CardGrid>
-          {circles.map((circle) => (
-            <CircleCard
-              slug={circle.slug} coverKey={circle.coverKey}
-              name={circle.name}
-              tagline={circle.tagline}
-              city={circle.city}
-              category={circle.category}
-              memberCount={circle.memberCount}
-              isPrivate={circle.isPrivate}
+          {communities.map((community) => (
+            <CommunityCard
+              slug={community.slug} coverKey={community.coverKey}
+              name={community.name}
+              tagline={community.tagline}
+              city={community.city}
+              category={community.category}
+              memberCount={community.memberCount}
+              isPrivate={community.isPrivate}
             />
           ))}
         </CardGrid>
       </Section>
 
-      <Section index={3} label="How it works" title="What a gathering is">
+      <Section index={3} label="How it works" title="What an event is">
         <div class="prose">
           <p>
-            A gathering is not an open invitation. It is a date, a street address, a start time in
-            real minutes, and a number of chairs that runs out.
+            An event is not an idea. It is a date, a street address, a start time in real
+            minutes, and a number of chairs that runs out.
           </p>
           <p>
             Someone has already cut the ice, booked the boat or lit the fire. The host writes the
@@ -359,7 +359,7 @@ pages.get("/", async (c) => {
             takes a place has read it.
           </p>
           <p>
-            That is what keeps a gathering small enough to be real. You are not an audience. You are
+            That is what keeps an event small enough to be real. You are not an audience. You are
             one of the twelve.
           </p>
         </div>
@@ -368,7 +368,7 @@ pages.get("/", async (c) => {
   );
 });
 
-/* ------------------------------------------------------------- circles */
+/* ------------------------------------------------------------- communities */
 
 /**
  * Micro-caps hairline row, active marked by a 1px brass underline. Never pills
@@ -377,12 +377,12 @@ pages.get("/", async (c) => {
  */
 function categoryFilters(active: string | undefined, place: PlaceQuery = {}): FilterOption[] {
   const options: FilterOption[] = [
-    { label: "All", href: withFilters("/circles", place, { category: undefined }), current: active === undefined },
+    { label: "All", href: withFilters("/communities", place, { category: undefined }), current: active === undefined },
   ];
-  for (const category of CIRCLE_CATEGORIES) {
+  for (const category of COMMUNITY_CATEGORIES) {
     options.push({
       label: category,
-      href: withFilters("/circles", place, { category }),
+      href: withFilters("/communities", place, { category }),
       current: active === category,
     });
   }
@@ -398,8 +398,8 @@ function categoryFilters(active: string | undefined, place: PlaceQuery = {}): Fi
  * row to that country's cities, which is the drill-down the product is built
  * around.
  *
- * `count` is what the reader is looking at: communities on `/circles`,
- * gatherings coming up on `/events`. A place with none of the thing this page
+ * `count` is what the reader is looking at: communities on `/communities`,
+ * events coming up on `/events`. A place with none of the thing this page
  * lists is left out rather than shown as a zero.
  */
 function placeRows(
@@ -407,10 +407,10 @@ function placeRows(
   place: PlaceQuery,
   countries: CountrySummary[],
   cities: CitySummary[],
-  counting: "circles" | "events",
+  counting: "communities" | "events",
 ): { countries: PlaceOption[]; cities: PlaceOption[] } {
-  const countOf = (row: { circleCount: number; eventCount: number }): number =>
-    counting === "circles" ? row.circleCount : row.eventCount;
+  const countOf = (row: { communityCount: number; eventCount: number }): number =>
+    counting === "communities" ? row.communityCount : row.eventCount;
 
   const countryOptions: PlaceOption[] = [
     {
@@ -462,28 +462,28 @@ function FilterGroup(props: { legend: string; children?: Child }) {
   );
 }
 
-pages.get("/circles", async (c) => {
+pages.get("/communities", async (c) => {
   const me = await currentUser(c);
   const flash = await readFlash(c, me);
   const raw = c.req.query("category");
 
   // An unknown category is a typo in the URL, not an empty directory (§8).
-  if (raw !== undefined && raw !== "" && !(CIRCLE_CATEGORIES as readonly string[]).includes(raw)) {
+  if (raw !== undefined && raw !== "" && !(COMMUNITY_CATEGORIES as readonly string[]).includes(raw)) {
     pageHeaders(c);
     return c.html(
-      <Layout bodyClass="page-index" title="Circles" user={layoutUser(me)} active="circles">
+      <Layout bodyClass="page-index" title="Communities" user={layoutUser(me)} active="communities">
         <Container>
           <div style="padding-block-start:var(--s5)">
             <Alert tone="warn">
-              {`There is no "${raw}" category. The five are: ${CIRCLE_CATEGORIES.join(", ")}.`}
+              {`There is no "${raw}" category. The five are: ${COMMUNITY_CATEGORIES.join(", ")}.`}
             </Alert>
           </div>
         </Container>
         <Hero
           index="01"
           label="Directory"
-          title="Circles"
-          lede="Each circle is run by one person, meets in one city, and holds a fixed number of members."
+          title="Communities"
+          lede="Each community is run by one person, meets in one city, and holds a fixed number of members."
         />
         <Section index={2} label="Category" title="Pick one of the five">
           <FilterRow label="Category" options={categoryFilters(undefined)} />
@@ -493,82 +493,82 @@ pages.get("/circles", async (c) => {
     );
   }
 
-  const category = raw === undefined || raw === "" ? undefined : (raw as CircleCategory);
+  const category = raw === undefined || raw === "" ? undefined : (raw as CommunityCategory);
   // Places come from the data, so an unknown one cannot be told from a typo.
   // It is an empty result with a way out, never a 404 and never a 400.
   const place = readPlace(c, { category });
   const now = new Date();
-  const [circles, allCountries, cities] = await Promise.all([
-    listCircles(c.env, { category, city: place.city, country: place.country }),
+  const [communities, allCountries, cities] = await Promise.all([
+    listCommunities(c.env, { category, city: place.city, country: place.country }),
     listCountries(c.env, { now }),
     listCities(c.env, { country: place.country, now }),
   ]);
-  const rows = placeRows("/circles", place, allCountries, cities, "circles");
+  const rows = placeRows("/communities", place, allCountries, cities, "communities");
   const where = place.city ?? place.country;
 
   pageHeaders(c);
   return c.html(
     <Layout bodyClass="page-index"
-      title={pageTitle(where === undefined ? "Circles" : `Circles in ${where}`, flash)}
-      description="Every circle, by country, city and category. One host, one city, a fixed number of members."
+      title={pageTitle(where === undefined ? "Communities" : `Communities in ${where}`, flash)}
+      description="Every community, by country, city and category. One host, one city, a fixed number of members."
       user={layoutUser(me)}
-      active="circles"
+      active="communities"
     >
       <FlashBanner flash={flash} />
       <Hero
         index="01"
         label="Directory"
-        title="Circles"
-        lede="Each circle is run by one person, meets in one city, and holds a fixed number of members."
+        title="Communities"
+        lede="Each community is run by one person, meets in one city, and holds a fixed number of members."
       />
       <Section index={2} label="Search" title="Find one">
-        <SearchField hint="A country, a city, a community or a gathering." />
+        <SearchField hint="A country, a city, a community or an event." />
       </Section>
       <Section
         index={3}
         label={place.country === undefined && place.city === undefined ? "Category" : "Where"}
-        title={directoryHeading(category, place, "circle", "circles")}
+        title={directoryHeading(category, place, "community", "communities")}
       >
         <div class="filter-stack">
           <FilterGroup legend="Country">
-            <PlaceRow label="Country" noun="circle" options={rows.countries} />
+            <PlaceRow label="Country" noun="community" options={rows.countries} />
           </FilterGroup>
           <FilterGroup legend="City">
-            <PlaceRow label="City" noun="circle" options={rows.cities} />
+            <PlaceRow label="City" noun="community" options={rows.cities} />
           </FilterGroup>
           <FilterGroup legend="Category">
             <FilterRow label="Category" options={categoryFilters(category, place)} />
           </FilterGroup>
         </div>
-        {circles.length === 0 ? (
+        {communities.length === 0 ? (
           <EmptyState
             title={
               where === undefined
-                ? "No circles in this category yet."
-                : `No circles in ${where} yet.`
+                ? "No communities in this category yet."
+                : `No communities in ${where} yet.`
             }
             note={
               where === undefined
-                ? "The other categories all have circles taking members."
+                ? "The other categories all have communities taking members."
                 : "The rows above list every country and city that has one. The country index has the whole map."
             }
             action={
               where === undefined
-                ? { href: "/circles", label: "Every circle" }
+                ? { href: "/communities", label: "Every community" }
                 : { href: "/countries", label: "The country index" }
             }
           />
         ) : (
           <CardGrid>
-            {circles.map((circle) => (
-              <CircleCard
-                slug={circle.slug} coverKey={circle.coverKey}
-                name={circle.name}
-                tagline={circle.tagline}
-                city={circle.city}
-                category={circle.category}
-                memberCount={circle.memberCount}
-                isPrivate={circle.isPrivate}
+            {communities.map((community) => (
+              <CommunityCard
+                slug={community.slug} coverKey={community.coverKey}
+                name={community.name}
+                tagline={community.tagline}
+                city={community.city}
+                category={community.category}
+                memberCount={community.memberCount}
+                isPrivate={community.isPrivate}
               />
             ))}
           </CardGrid>
@@ -578,7 +578,7 @@ pages.get("/circles", async (c) => {
   );
 });
 
-/* --------------------------------------------------------------- circle */
+/* --------------------------------------------------------------- community */
 
 type MembershipPanelProps = {
   slug: string;
@@ -598,7 +598,7 @@ function MembershipPanel(props: MembershipPanelProps) {
       <div class="action">
         <p class="micro">Membership</p>
         <Button
-          href={`/join?next=${encodeURIComponent(`/circles/${slug}`)}`}
+          href={`/join?next=${encodeURIComponent(`/communities/${slug}`)}`}
           variant="primary"
           block={true}
         >
@@ -613,12 +613,12 @@ function MembershipPanel(props: MembershipPanelProps) {
     return (
       <div class="action">
         <p class="micro">Membership</p>
-        <p class="action-line">You are in this circle.</p>
-        <Button href="#gatherings" variant="ghost" block={true}>
+        <p class="action-line">You are in this community.</p>
+        <Button href="#events" variant="ghost" block={true}>
           {dateCount === 0 ? "No dates yet" : dateCount === 1 ? "The one date" : `The ${dateCount} dates`}
         </Button>
         <p class="action-help">
-          A place costs 1 credit. The passes are below, and your credits are on{" "}
+          A place costs 1 ticket. The packages are below, and your tickets are on{" "}
           <a href="/account">your account</a>.
         </p>
       </div>
@@ -632,7 +632,7 @@ function MembershipPanel(props: MembershipPanelProps) {
         <p class="action-line">Your request is waiting.</p>
         <p class="action-help">
           {hostFirstName} approves members by hand. Meanwhile:{" "}
-          <a href="/events">other gatherings</a>.
+          <a href="/events">other events</a>.
         </p>
       </div>
     );
@@ -641,42 +641,42 @@ function MembershipPanel(props: MembershipPanelProps) {
   return (
     <div class="action">
       <p class="micro">Membership</p>
-      <form method="post" action={`/circles/${slug}/join`}>
-        <input type="hidden" name="next" value={`/circles/${slug}`} />
+      <form method="post" action={`/communities/${slug}/join`}>
+        <input type="hidden" name="next" value={`/communities/${slug}`} />
         <Button type="submit" variant="primary" block={true}>
-          {isPrivate ? "Request an invitation" : "Join the circle"}
+          {isPrivate ? "Ask the host to join" : "Join the community"}
         </Button>
       </form>
       <p class="action-help">
         {isPrivate
-          ? "This circle approves members by hand."
-          : "Public circle. You are in as soon as you ask."}
+          ? "This community approves members by hand."
+          : "Public community. You are in as soon as you ask."}
       </p>
     </div>
   );
 }
 
-pages.get("/circles/:slug", async (c) => {
+pages.get("/communities/:slug", async (c) => {
   const me = await currentUser(c);
   const slug = c.req.param("slug");
-  const found = await getCircleBySlug(c.env, slug);
+  const found = await getCommunityBySlug(c.env, slug);
   if (!found) {
     return notFoundPage(
       c,
       me,
-      "No such circle",
-      `Nothing here answers to "${slug}". The directory lists every circle there is.`,
+      "No such community",
+      `Nothing here answers to "${slug}". The directory lists every community there is.`,
     );
   }
-  const { circle, host } = found;
+  const { community, host } = found;
   const flash = await readFlash(c, me);
 
   const [packages, events, members, photos, membership] = await Promise.all([
-    listPackages(c.env, circle.id),
-    listEventsForCircle(c.env, circle.id),
-    listApprovedMembers(c.env, circle.id),
-    listCirclePhotos(c.env, circle.id),
-    me ? getMembership(c.env, circle.id, me.user.id) : Promise.resolve(null),
+    listPackages(c.env, community.id),
+    listEventsForCommunity(c.env, community.id),
+    listApprovedMembers(c.env, community.id),
+    listCommunityPhotos(c.env, community.id),
+    me ? getMembership(c.env, community.id, me.user.id) : Promise.resolve(null),
   ]);
 
   const nextDates = upcoming(events, new Date());
@@ -687,22 +687,22 @@ pages.get("/circles/:slug", async (c) => {
 
   const barAction: Child =
     me === null ? (
-      <Button href={`/join?next=${encodeURIComponent(`/circles/${circle.slug}`)}`} variant="ghost">
+      <Button href={`/join?next=${encodeURIComponent(`/communities/${community.slug}`)}`} variant="ghost">
         Sign in
       </Button>
     ) : status === "approved" ? (
-      <Button href="#gatherings" variant="ghost">
+      <Button href="#events" variant="ghost">
         The dates
       </Button>
     ) : status === "pending" ? (
       <Button href="/events" variant="ghost">
-        Other gatherings
+        Other events
       </Button>
     ) : (
-      <form method="post" action={`/circles/${circle.slug}/join`}>
-        <input type="hidden" name="next" value={`/circles/${circle.slug}`} />
+      <form method="post" action={`/communities/${community.slug}/join`}>
+        <input type="hidden" name="next" value={`/communities/${community.slug}`} />
         <Button type="submit" variant="ghost">
-          {circle.isPrivate ? "Request" : "Join"}
+          {community.isPrivate ? "Request" : "Join"}
         </Button>
       </form>
     );
@@ -710,14 +710,14 @@ pages.get("/circles/:slug", async (c) => {
   pageHeaders(c);
   return c.html(
     <Layout
-      title={pageTitle(circle.name, flash)}
-      description={circle.tagline}
+      title={pageTitle(community.name, flash)}
+      description={community.tagline}
       user={layoutUser(me)}
-      active="circles"
+      active="communities"
       actionBar={
         <ActionBar
-          title={circle.name}
-          note={`${plural(circle.memberCount, "member", "members")} · ${plural(nextDates.length, "date", "dates")}`}
+          title={community.name}
+          note={`${plural(community.memberCount, "member", "members")} · ${plural(nextDates.length, "date", "dates")}`}
         >
           {barAction}
         </ActionBar>
@@ -726,41 +726,41 @@ pages.get("/circles/:slug", async (c) => {
       <FlashBanner flash={flash} />
 
       {/* §5: full-bleed cover, the name overlapping its lower edge. The
-          photograph leads; the plate is what a circle without one falls back
+          photograph leads; the plate is what a community without one falls back
           to (§11). */}
       <section class="section">
         <Container>
           <div class="grid--bleed">
             <Plate
-              seed={circle.slug}
-              category={circle.category}
-              monogram={initials(circle.name)}
+              seed={community.slug}
+              category={community.category}
+              monogram={initials(community.name)}
               shape="hero"
               density="hero"
-              objectKey={circle.coverKey}
-              alt={circle.name}
+              objectKey={community.coverKey}
+              alt={community.name}
             />
           </div>
           <div class="eight">
             <h1 class="h-page" style="margin-top:-.4em;position:relative">
-              {circle.name}
+              {community.name}
             </h1>
-            <p class="lede">{circle.tagline}</p>
+            <p class="lede">{community.tagline}</p>
             <p class="meta" style="margin-block-start:var(--s4)">
-              <span class="micro micro--brass">{circle.category}</span>{" · "}
-              {placeLabel(circle.city, circle.country)} · <span class="num">{circle.memberCount}</span> members ·{" "}
-              <span class="num">{circle.eventCount}</span> gatherings
-              {circle.isPrivate ? " · by request" : ""}
+              <span class="micro micro--brass">{community.category}</span>{" · "}
+              {placeLabel(community.city, community.country)} · <span class="num">{community.memberCount}</span> members ·{" "}
+              <span class="num">{community.eventCount}</span> events
+              {community.isPrivate ? " · by request" : ""}
             </p>
           </div>
         </Container>
       </section>
 
-      <Section index={1} label="Story" title="What this circle is">
+      <Section index={1} label="Story" title="What this community is">
         <div class="row" style="align-items:flex-start;gap:var(--s7)">
           <div style="flex:9999 1 540px">
             <div class="prose">
-              <p>{circle.description}</p>
+              <p>{community.description}</p>
             </div>
             <div class="row" style="margin-block-start:var(--s6);align-items:flex-start">
               <span class="avatar" aria-hidden="true">
@@ -770,15 +770,15 @@ pages.get("/circles/:slug", async (c) => {
                 <p class="person-name">
                   {host.name} <span class="status status--brass">Host</span>
                 </p>
-                <p class="person-line">{host.headline ?? "Runs this circle."}</p>
-                <p class="person-line">{host.city ?? circle.city}</p>
+                <p class="person-line">{host.headline ?? "Runs this community."}</p>
+                <p class="person-line">{host.city ?? community.city}</p>
               </div>
             </div>
           </div>
           <div class="action-sidebar bordered" style="flex:1 1 280px;padding:var(--s5)">
             <MembershipPanel
-              slug={circle.slug}
-              isPrivate={circle.isPrivate}
+              slug={community.slug}
+              isPrivate={community.isPrivate}
               signedIn={me !== null}
               status={status}
               hostFirstName={hostFirst}
@@ -790,16 +790,16 @@ pages.get("/circles/:slug", async (c) => {
 
       <Section
         index={2}
-        label="Gatherings"
+        label="Events"
         title="What is coming up"
-        id="gatherings"
-        action={{ href: "/events", label: "Every gathering" }}
+        id="events"
+        action={{ href: "/events", label: "Every event" }}
       >
         {nextDates.length === 0 ? (
           <EmptyState
-            title="No gatherings scheduled."
-            note={`${hostFirst} posts new dates here first. The other circles are running now.`}
-            action={{ href: "/events", label: "Gatherings elsewhere" }}
+            title="No events scheduled."
+            note={`${hostFirst} posts new dates here first. The other communities are running now.`}
+            action={{ href: "/events", label: "Events elsewhere" }}
           />
         ) : (
           <CardGrid wide={true}>
@@ -807,25 +807,25 @@ pages.get("/circles/:slug", async (c) => {
               <EventCard
                 slug={e.slug} coverKey={e.coverKey}
                 title={e.title}
-                circleName={circle.name}
+                communityName={community.name}
                 city={e.city}
                 venue={e.venue}
                 when={formatDateRange(new Date(e.startsAt), new Date(e.endsAt))}
                 placesLeft={e.placesLeft}
-                category={circle.category}
+                category={community.category}
               />
             ))}
           </CardGrid>
         )}
       </Section>
 
-      <Section index={3} label="Passes" title="How a place is bought">
-        <PassTable
-          passes={toPassOffers(circle.slug, packages)}
-          caption={`Passes for ${circle.name}`}
+      <Section index={3} label="Packages" title="How a place is bought">
+        <PackageTable
+          packages={toPackageChoices(community.slug, packages)}
+          caption={`Packages for ${community.name}`}
         />
         <p class="meta" style="margin-block-start:var(--s4)">
-          One credit takes one place at one gathering. Cancel the place and the credit comes back.
+          One ticket takes one place at one event. Cancel the place and the ticket comes back.
         </p>
       </Section>
 
@@ -834,23 +834,23 @@ pages.get("/circles/:slug", async (c) => {
           {photos.length === 0 ? (
             <EmptyState
               title="No plates in the archive yet."
-              note={`${hostFirst} adds them after each gathering.`}
+              note={`${hostFirst} adds them after each event.`}
             />
           ) : (
             <Gallery
-              label={`${circle.name}, archive`}
-              category={circle.category}
+              label={`${community.name}, archive`}
+              category={community.category}
               items={toGalleryItems(photos)}
             />
           )}
         </div>
       </Section>
 
-      <Section index={5} label="Members" title="Who is in this circle">
+      <Section index={5} label="Members" title="Who is in this community">
         <div data-members="">
           <MemberList
             members={otherMembers.map(toPerson)}
-            total={circle.memberCount}
+            total={community.memberCount}
             host={
               hostMember
                 ? toPerson(hostMember)
@@ -863,7 +863,7 @@ pages.get("/circles/:slug", async (c) => {
   );
 });
 
-/* ------------------------------------------------------------ gatherings */
+/* ------------------------------------------------------------ events */
 
 /** Soonest first, grouped under the month they fall in (§5). */
 function toLedgerGroups(events: EventSummary[]): LedgerGroup[] {
@@ -880,7 +880,7 @@ function toLedgerGroups(events: EventSummary[]): LedgerGroup[] {
     group.entries.push({
       slug: e.slug,
       title: e.title,
-      circleName: e.circle.name,
+      communityName: e.community.name,
       venue: e.venue,
       city: e.city,
       dayLabel,
@@ -913,20 +913,20 @@ pages.get("/events", async (c) => {
   pageHeaders(c);
   return c.html(
     <Layout bodyClass="page-index"
-      title={pageTitle(where === undefined ? "Gatherings" : `Gatherings in ${where}`, flash)}
-      description="Every published gathering, soonest first, with the places left on each."
+      title={pageTitle(where === undefined ? "Events" : `Events in ${where}`, flash)}
+      description="Every published event, soonest first, with the places left on each."
       user={layoutUser(me)}
-      active="gatherings"
+      active="events"
     >
       <FlashBanner flash={flash} />
       <Hero
         index="01"
-        label="Gatherings"
-        title="Gatherings"
-        lede="Every published gathering, soonest first. The number on the right is how many places are left."
+        label="Events"
+        title="Events"
+        lede="Every published event, soonest first. The number on the right is how many places are left."
       />
       <Section index={2} label="Search" title="Find one">
-        <SearchField hint="A country, a city, a community or a gathering." />
+        <SearchField hint="A country, a city, a community or an event." />
       </Section>
       <Section
         index={3}
@@ -936,27 +936,27 @@ pages.get("/events", async (c) => {
       >
         <div class="filter-stack">
           <FilterGroup legend="Country">
-            <PlaceRow label="Country" noun="gathering" options={filters.countries} />
+            <PlaceRow label="Country" noun="event" options={filters.countries} />
           </FilterGroup>
           <FilterGroup legend="City">
-            <PlaceRow label="City" noun="gathering" options={filters.cities} />
+            <PlaceRow label="City" noun="event" options={filters.cities} />
           </FilterGroup>
         </div>
         {rows.length === 0 ? (
           <EmptyState
             title={
               where === undefined
-                ? "No gatherings scheduled."
-                : `No gatherings in ${where} yet.`
+                ? "No events scheduled."
+                : `No events in ${where} yet.`
             }
             note={
               where === undefined
-                ? "Hosts post a season at a time. The circles list who is running what."
+                ? "Hosts post a season at a time. The communities list who is running what."
                 : "The rows above list every country and city with a date coming up. The country index has the whole map."
             }
             action={
               where === undefined
-                ? { href: "/circles", label: "The circles" }
+                ? { href: "/communities", label: "The communities" }
                 : { href: "/countries", label: "The country index" }
             }
           />
@@ -968,17 +968,17 @@ pages.get("/events", async (c) => {
   );
 });
 
-/* ------------------------------------------------------------- gathering */
+/* ------------------------------------------------------------- event */
 
 type ActionInput = {
   signedIn: boolean;
   isPrivate: boolean;
   placesLeft: number;
   status: MembershipStatus | null;
-  creditsLeft: number;
+  ticketsLeft: number;
   bookedCode: string | null;
   hostFirstName: string;
-  passes: PassOffer[];
+  packages: PackageChoice[];
   joinHref: string;
   requestAction: string;
   bookAction: string;
@@ -991,8 +991,8 @@ type ActionInput = {
  *
  * Booked is checked first: a member who already holds a place still holds it
  * when the last one goes, and the ticket stub is what they need to see. Full is
- * checked before signed-out, because "Sign in to reserve" on a gathering with
- * no places is a dead end — the state belongs to the gathering, not to the
+ * checked before signed-out, because "Sign in to reserve" on an event with
+ * no places is a dead end — the state belongs to the event, not to the
  * reader, and the linked next date is the useful answer either way. A declined
  * membership counts as no membership, exactly as `book()` treats it.
  */
@@ -1009,18 +1009,18 @@ function pickActionState(input: ActionInput): ActionState {
   if (input.status === null || input.status === "declined") {
     return input.isPrivate
       ? { kind: "join-private", requestAction: input.requestAction, next: input.next }
-      : { kind: "join-public", passes: input.passes };
+      : { kind: "join-public", packages: input.packages };
   }
   if (input.status === "pending") return { kind: "pending", hostFirstName: input.hostFirstName };
-  if (input.creditsLeft > 0) {
+  if (input.ticketsLeft > 0) {
     return {
       kind: "ready",
       bookAction: input.bookAction,
-      creditsLeft: input.creditsLeft,
-      creditsTotal: input.creditsLeft,
+      ticketsLeft: input.ticketsLeft,
+      ticketsTotal: input.ticketsLeft,
     };
   }
-  return { kind: "no-credits", passes: input.passes };
+  return { kind: "no-tickets", packages: input.packages };
 }
 
 /** The same action as the sidebar, on the bar that only exists under 900px (§10.1). */
@@ -1064,13 +1064,13 @@ function actionBarButton(state: ActionState, bookAction: string): Child {
     case "pending":
       return (
         <Button href="/events" variant="ghost">
-          Other gatherings
+          Other events
         </Button>
       );
     default:
       return (
         <Button href="#reserve" variant="ghost">
-          Take a pass
+          Take a package
         </Button>
       );
   }
@@ -1084,71 +1084,71 @@ pages.get("/events/:slug", async (c) => {
     return notFoundPage(
       c,
       me,
-      "No such gathering",
+      "No such event",
       `Nothing here answers to "${slug}". The ledger lists every published date.`,
     );
   }
-  const { event, circle } = found;
+  const { event, community } = found;
 
   // A draft belongs to its host and to nobody else — the public URL must not
   // leak one.
   if (event.status !== "published") {
-    const maySee = me !== null && (await isCircleHost(c.env, circle.id, me.user.id));
+    const maySee = me !== null && (await isCommunityHost(c.env, community.id, me.user.id));
     if (!maySee) {
       return notFoundPage(
         c,
         me,
-        "No such gathering",
-        "This date is not published. The ledger lists every gathering that is.",
+        "No such event",
+        "This date is not published. The ledger lists every event that is.",
       );
     }
   }
 
   const flash = await readFlash(c, me);
-  const [packages, attendees, photos, circleEvents, membership, passes, bookings, circleRow] =
+  const [packages, attendees, photos, communityEvents, membership, held, bookings, communityRow] =
     await Promise.all([
-      listPackages(c.env, circle.id),
+      listPackages(c.env, community.id),
       listEventAttendees(c.env, event.id),
       listEventPhotos(c.env, event.id),
-      listEventsForCircle(c.env, circle.id),
-      me ? getMembership(c.env, circle.id, me.user.id) : Promise.resolve(null),
-      me ? listPassesForUser(c.env, me.user.id) : Promise.resolve([]),
+      listEventsForCommunity(c.env, community.id),
+      me ? getMembership(c.env, community.id, me.user.id) : Promise.resolve(null),
+      me ? listPackagesForUser(c.env, me.user.id) : Promise.resolve([]),
       me ? listBookingsForUser(c.env, me.user.id) : Promise.resolve([]),
-      getCircleBySlug(c.env, circle.slug),
+      getCommunityBySlug(c.env, community.slug),
     ]);
 
   const start = new Date(event.startsAt);
   const end = new Date(event.endsAt);
-  const hostFirst = firstName(circleRow?.host.name ?? "");
+  const hostFirst = firstName(communityRow?.host.name ?? "");
 
-  const creditsLeft = passes
-    .filter((p) => p.circleSlug === circle.slug)
-    .reduce((n, p) => n + p.creditsLeft, 0);
+  const ticketsLeft = held
+    .filter((p) => p.communitySlug === community.slug)
+    .reduce((n, p) => n + p.ticketsLeft, 0);
   const booked = bookings.find((b) => b.eventSlug === event.slug && b.status === "confirmed");
-  const nextFromCircle = upcoming(circleEvents, new Date()).find((e) => e.slug !== event.slug);
+  const nextFromCommunity = upcoming(communityEvents, new Date()).find((e) => e.slug !== event.slug);
 
   const here = `/events/${event.slug}`;
   const bookAction = `/events/${event.slug}/book`;
   const state = pickActionState({
     signedIn: me !== null,
-    isPrivate: circle.isPrivate,
+    isPrivate: community.isPrivate,
     placesLeft: event.placesLeft,
     status: membership?.status ?? null,
-    creditsLeft,
+    ticketsLeft,
     bookedCode: booked?.code ?? null,
     hostFirstName: hostFirst,
-    passes: toPassOffers(circle.slug, packages, here),
+    packages: toPackageChoices(community.slug, packages, here),
     joinHref: `/join?next=${encodeURIComponent(here)}`,
-    requestAction: `/circles/${circle.slug}/join`,
+    requestAction: `/communities/${community.slug}/join`,
     bookAction,
     next: here,
     nextUp:
-      nextFromCircle === undefined
+      nextFromCommunity === undefined
         ? undefined
         : {
-            title: nextFromCircle.title,
-            when: formatDay(new Date(nextFromCircle.startsAt)),
-            href: `/events/${nextFromCircle.slug}`,
+            title: nextFromCommunity.title,
+            when: formatDay(new Date(nextFromCommunity.startsAt)),
+            href: `/events/${nextFromCommunity.slug}`,
           },
   });
 
@@ -1158,11 +1158,11 @@ pages.get("/events/:slug", async (c) => {
       title={pageTitle(event.title, flash)}
       description={event.summary}
       user={layoutUser(me)}
-      active="gatherings"
+      active="events"
       actionBar={
         <ActionBar
           title={event.title}
-          note={`1 credit · ${event.placesLeft} of ${event.capacity} places left`}
+          note={`1 ticket · ${event.placesLeft} of ${event.capacity} places left`}
         >
           {actionBarButton(state, bookAction)}
         </ActionBar>
@@ -1177,7 +1177,7 @@ pages.get("/events/:slug", async (c) => {
               <div class="grid--bleed">
                 <Plate
                   seed={event.slug}
-                  category={circle.category}
+                  category={community.category}
                   rule={true}
                   shape="hero"
                   density="hero"
@@ -1205,9 +1205,9 @@ pages.get("/events/:slug", async (c) => {
                   </dd>
                 </div>
                 <div>
-                  <dt class="micro">Circle</dt>
+                  <dt class="micro">Community</dt>
                   <dd>
-                    <a href={`/circles/${circle.slug}`}>{circle.name}</a>
+                    <a href={`/communities/${community.slug}`}>{community.name}</a>
                   </dd>
                 </div>
                 <div>
@@ -1229,7 +1229,7 @@ pages.get("/events/:slug", async (c) => {
               style="flex:1 1 280px;padding:var(--s5)"
             >
               <ActionArea
-                circle={{ slug: circle.slug, name: circle.name }}
+                community={{ slug: community.slug, name: community.name }}
                 placesLeft={event.placesLeft}
                 capacity={event.capacity}
                 state={state}
@@ -1255,7 +1255,7 @@ pages.get("/events/:slug", async (c) => {
           ) : (
             <Gallery
               label={`${event.title}, archive`}
-              category={circle.category}
+              category={community.category}
               items={toGalleryItems(photos)}
             />
           )}
@@ -1336,7 +1336,7 @@ pages.get("/calendar", async (c) => {
             <Alert tone="warn">{`"${raw}" is not a month. Months look like 2026-09.`}</Alert>
           </div>
         </Container>
-        <Hero index="01" label="Calendar" title="Calendar" lede="Published gatherings, by day." />
+        <Hero index="01" label="Calendar" title="Calendar" lede="Published events, by day." />
         <Section index={2} label="Elsewhere" title="This month instead">
           <Button href="/calendar" variant="ghost">
             {monthTitle(now.getUTCFullYear(), now.getUTCMonth() + 1)}
@@ -1361,7 +1361,7 @@ pages.get("/calendar", async (c) => {
   return c.html(
     <Layout bodyClass="page-index"
       title={pageTitle("Calendar", flash)}
-      description="Every published gathering, laid out by the day it falls on."
+      description="Every published event, laid out by the day it falls on."
       user={layoutUser(me)}
       active="calendar"
     >
@@ -1370,7 +1370,7 @@ pages.get("/calendar", async (c) => {
         index="01"
         label="Calendar"
         title="Calendar"
-        lede="Published gatherings by day. Days with nothing are left empty, which is most of them."
+        lede="Published events by day. Days with nothing are left empty, which is most of them."
       />
       <section class="section">
         <Container>
@@ -1393,7 +1393,7 @@ pages.get("/calendar", async (c) => {
 /**
  * Search and geography — the two ways in that are not a link someone already
  * had. Both are read from the data: the countries and cities below come from
- * the communities and gatherings that exist, so a community added in a new
+ * the communities and events that exist, so a community added in a new
  * country puts that country on `/countries` with no code change.
  *
  * Country is the primary axis and city the drill-down, which is why the rows
@@ -1430,7 +1430,7 @@ function readPlace(c: PageContext, base: PlaceQuery = {}): PlaceQuery {
   return { ...base, country: clean(c.req.query("country")), city: clean(c.req.query("city")) };
 }
 
-/** `Every circle` · `Sailing circles` · `Sailing circles in Monaco`. */
+/** `Every community` · `Sailing communities` · `Sailing communities in Monaco`. */
 function directoryHeading(
   category: string | undefined,
   place: PlaceQuery,
@@ -1493,7 +1493,7 @@ function SearchField(props: { value?: string; hint?: string }) {
   return (
     <form class="searchbar" method="get" action="/search" role="search">
       <label class="vh" for="q">
-        Search communities, gatherings, cities and countries
+        Search communities, events, cities and countries
       </label>
       <input
         id="q"
@@ -1536,7 +1536,7 @@ function NoResults(props: { title: string; note: string }) {
       <h3 class="h-card">{props.title}</h3>
       <p class="empty-note">{props.note}</p>
       <div class="empty-action row">
-        <Button href="/circles" variant="quiet">
+        <Button href="/communities" variant="quiet">
           Browse all communities
         </Button>
         <Button href="/events" variant="quiet">
@@ -1547,12 +1547,12 @@ function NoResults(props: { title: string; note: string }) {
   );
 }
 
-/** `Lisbon · Portugal · 2 communities · 4 gatherings coming up`. */
-function placeTally(circleCount: number, eventCount: number): string {
-  return `${plural(circleCount, "community", "communities")} · ${plural(
+/** `Lisbon · Portugal · 2 communities · 4 events coming up`. */
+function placeTally(communityCount: number, eventCount: number): string {
+  return `${plural(communityCount, "community", "communities")} · ${plural(
     eventCount,
-    "gathering",
-    "gatherings",
+    "event",
+    "events",
   )} coming up`;
 }
 
@@ -1573,7 +1573,7 @@ pages.get("/countries", async (c) => {
     <Layout
       bodyClass="page-index"
       title={pageTitle("Countries", flash)}
-      description="Every country 2CC runs in, with the communities and the gatherings coming up in each."
+      description="Every country 2CC runs in, with the communities and the events coming up in each."
       user={layoutUser(me)}
       active="countries"
     >
@@ -1585,19 +1585,19 @@ pages.get("/countries", async (c) => {
         lede="One world. Every country a community meets in, with the cities underneath it and the dates coming up in each."
       />
       <Section index={2} label="Search" title="Looking for somewhere">
-        <SearchField hint="A country, a city, a community or a gathering." />
+        <SearchField hint="A country, a city, a community or an event." />
       </Section>
       <Section
         index={3}
         label="Index"
         title={plural(countries.length, "country", "countries")}
-        action={{ href: "/events", label: "Every gathering" }}
+        action={{ href: "/events", label: "Every event" }}
       >
         {countries.length === 0 ? (
           <EmptyState
             title="No countries yet."
             note="A country appears here as soon as a community is based in it."
-            action={{ href: "/circles", label: "Browse all communities" }}
+            action={{ href: "/communities", label: "Browse all communities" }}
           />
         ) : (
           <div class="geo-index">
@@ -1621,7 +1621,7 @@ pages.get("/countries", async (c) => {
                 <dl class="geo-counts">
                   <div>
                     <dt class="micro">Communities</dt>
-                    <dd class="num">{row.circleCount}</dd>
+                    <dd class="num">{row.communityCount}</dd>
                   </div>
                   <div>
                     <dt class="micro">Cities</dt>
@@ -1659,9 +1659,9 @@ pages.get("/countries/:country", async (c) => {
   }
 
   const flash = await readFlash(c, me);
-  const [cities, circles, events] = await Promise.all([
+  const [cities, communities, events] = await Promise.all([
     listCities(c.env, { country: found.country, now }),
-    listCircles(c.env, { country: found.country }),
+    listCommunities(c.env, { country: found.country }),
     listEvents(c.env, { country: found.country, from: now }),
   ]);
 
@@ -1670,7 +1670,7 @@ pages.get("/countries/:country", async (c) => {
     <Layout
       bodyClass="page-index"
       title={pageTitle(found.country, flash)}
-      description={`What is on in ${found.country}: ${placeTally(found.circleCount, found.eventCount)}.`}
+      description={`What is on in ${found.country}: ${placeTally(found.communityCount, found.eventCount)}.`}
       user={layoutUser(me)}
       active="countries"
     >
@@ -1679,7 +1679,7 @@ pages.get("/countries/:country", async (c) => {
         index="01"
         label="Country"
         title={`What is on in ${found.country}`}
-        lede={`${placeTally(found.circleCount, found.eventCount)}, across ${plural(
+        lede={`${placeTally(found.communityCount, found.eventCount)}, across ${plural(
           found.cityCount,
           "city",
           "cities",
@@ -1689,7 +1689,7 @@ pages.get("/countries/:country", async (c) => {
       <Section index={2} label="Cities" title="Where in the country">
         <PlaceRow
           label={`Cities in ${found.country}`}
-          noun="gathering"
+          noun="event"
           options={cities.map((city) => ({
             label: city.city,
             href: `/cities/${encodeURIComponent(city.city)}`,
@@ -1698,37 +1698,37 @@ pages.get("/countries/:country", async (c) => {
           }))}
         />
         <p class="meta" style="margin-block-start:var(--s4)">
-          The number beside a city is how many gatherings it has coming up.
+          The number beside a city is how many events it has coming up.
         </p>
       </Section>
 
       <Section
         index={3}
         label="Communities"
-        title={plural(circles.length, "community", "communities")}
+        title={plural(communities.length, "community", "communities")}
         action={{
-          href: `/circles?country=${encodeURIComponent(found.country)}`,
+          href: `/communities?country=${encodeURIComponent(found.country)}`,
           label: "In the directory",
         }}
       >
-        {circles.length === 0 ? (
+        {communities.length === 0 ? (
           <EmptyState
             title={`No communities based in ${found.country} yet.`}
-            note="The gatherings below are run by communities based elsewhere."
-            action={{ href: "/circles", label: "Browse all communities" }}
+            note="The events below are run by communities based elsewhere."
+            action={{ href: "/communities", label: "Browse all communities" }}
           />
         ) : (
           <CardGrid>
-            {circles.map((circle) => (
-              <CircleCard
-                slug={circle.slug}
-                coverKey={circle.coverKey}
-                name={circle.name}
-                tagline={circle.tagline}
-                city={circle.city}
-                category={circle.category}
-                memberCount={circle.memberCount}
-                isPrivate={circle.isPrivate}
+            {communities.map((community) => (
+              <CommunityCard
+                slug={community.slug}
+                coverKey={community.coverKey}
+                name={community.name}
+                tagline={community.tagline}
+                city={community.city}
+                category={community.category}
+                memberCount={community.memberCount}
+                isPrivate={community.isPrivate}
               />
             ))}
           </CardGrid>
@@ -1776,8 +1776,8 @@ pages.get("/cities/:city", async (c) => {
   }
 
   const flash = await readFlash(c, me);
-  const [circles, events] = await Promise.all([
-    listCircles(c.env, { city: found.city }),
+  const [communities, events] = await Promise.all([
+    listCommunities(c.env, { city: found.city }),
     listEvents(c.env, { city: found.city, from: now }),
   ]);
 
@@ -1786,7 +1786,7 @@ pages.get("/cities/:city", async (c) => {
     <Layout
       bodyClass="page-index"
       title={pageTitle(found.city, flash)}
-      description={`What is on in ${found.city}: ${placeTally(found.circleCount, found.eventCount)}.`}
+      description={`What is on in ${found.city}: ${placeTally(found.communityCount, found.eventCount)}.`}
       user={layoutUser(me)}
       active="countries"
     >
@@ -1799,7 +1799,7 @@ pages.get("/cities/:city", async (c) => {
         index="01"
         label="City"
         title={`What is on in ${found.city}`}
-        lede={`${placeTally(found.circleCount, found.eventCount)}. Every gathering has a date, an address and a number of places.`}
+        lede={`${placeTally(found.communityCount, found.eventCount)}. Every event has a date, an address and a number of places.`}
       >
         <a class="geo-up" href={`/countries/${encodeURIComponent(found.country)}`}>
           {`Everything in ${found.country}`}
@@ -1809,7 +1809,7 @@ pages.get("/cities/:city", async (c) => {
       <Section
         index={2}
         label="Coming up"
-        title={plural(events.length, "gathering", "gatherings")}
+        title={plural(events.length, "event", "events")}
         action={{ href: "/calendar", label: "By month" }}
       >
         {events.length === 0 ? (
@@ -1830,16 +1830,16 @@ pages.get("/cities/:city", async (c) => {
         index={3}
         label="Communities"
         title={
-          circles.length === 1
+          communities.length === 1
             ? "The community based here"
-            : `${circles.length} communities based here`
+            : `${communities.length} communities based here`
         }
         action={{
-          href: `/circles?city=${encodeURIComponent(found.city)}`,
+          href: `/communities?city=${encodeURIComponent(found.city)}`,
           label: "In the directory",
         }}
       >
-        {circles.length === 0 ? (
+        {communities.length === 0 ? (
           <EmptyState
             title={`No community is based in ${found.city}.`}
             note="The dates above are run by communities based in other cities."
@@ -1850,16 +1850,16 @@ pages.get("/cities/:city", async (c) => {
           />
         ) : (
           <CardGrid>
-            {circles.map((circle) => (
-              <CircleCard
-                slug={circle.slug}
-                coverKey={circle.coverKey}
-                name={circle.name}
-                tagline={circle.tagline}
-                city={circle.city}
-                category={circle.category}
-                memberCount={circle.memberCount}
-                isPrivate={circle.isPrivate}
+            {communities.map((community) => (
+              <CommunityCard
+                slug={community.slug}
+                coverKey={community.coverKey}
+                name={community.name}
+                tagline={community.tagline}
+                city={community.city}
+                category={community.category}
+                memberCount={community.memberCount}
+                isPrivate={community.isPrivate}
               />
             ))}
           </CardGrid>
@@ -1891,7 +1891,7 @@ pages.get("/search", async (c) => {
         </Container>
         <Hero index="01" label="Search" title="Search" lede="One field, across every country." />
         <Section index={2} label="Again" title="Try a shorter one">
-          <SearchField hint="A country, a city, a community or a gathering." />
+          <SearchField hint="A country, a city, a community or an event." />
         </Section>
       </Layout>,
       400,
@@ -1909,7 +1909,7 @@ pages.get("/search", async (c) => {
       <Layout
         bodyClass="page-index"
         title={pageTitle("Search", flash)}
-        description="Search every community, gathering, city and country on 2CC."
+        description="Search every community, event, city and country on 2CC."
         user={layoutUser(me)}
         active="search"
       >
@@ -1918,10 +1918,10 @@ pages.get("/search", async (c) => {
           index="01"
           label="Search"
           title="Search"
-          lede="One field. It reads community names and descriptions, gathering titles and summaries, and the names of cities and countries."
+          lede="One field. It reads community names and descriptions, event titles and summaries, and the names of cities and countries."
         />
         <Section index={2} label="Field" title="What are you looking for">
-          <SearchField hint="A country, a city, a community or a gathering." />
+          <SearchField hint="A country, a city, a community or an event." />
         </Section>
         <Section
           index={3}
@@ -1931,7 +1931,7 @@ pages.get("/search", async (c) => {
         >
           <PlaceRow
             label="Countries"
-            noun="gathering"
+            noun="event"
             options={countries.map((row) => ({
               label: row.country,
               href: `/countries/${encodeURIComponent(row.country)}`,
@@ -1945,13 +1945,13 @@ pages.get("/search", async (c) => {
   }
 
   const now = new Date();
-  const [communities, gatherings, countries, cities] = await Promise.all([
-    searchCircles(c.env, term, { limit: SEARCH_GROUP_LIMIT }),
+  const [communities, events, countries, cities] = await Promise.all([
+    searchCommunities(c.env, term, { limit: SEARCH_GROUP_LIMIT }),
     searchEvents(c.env, term, { from: now, limit: SEARCH_GROUP_LIMIT }),
     listCountries(c.env, { match: term, now, limit: SEARCH_GROUP_LIMIT }),
     listCities(c.env, { match: term, now, limit: SEARCH_GROUP_LIMIT }),
   ]);
-  const total = communities.length + gatherings.length + countries.length + cities.length;
+  const total = communities.length + events.length + countries.length + cities.length;
 
   /** Said only when a group is full, because then there may well be more. */
   const capped = (n: number): Child =>
@@ -1966,7 +1966,7 @@ pages.get("/search", async (c) => {
     <Layout
       bodyClass="page-index"
       title={pageTitle(`Search: ${term}`, flash)}
-      description={`What matches "${term}" across every community, gathering, city and country.`}
+      description={`What matches "${term}" across every community, event, city and country.`}
       user={layoutUser(me)}
       active="search"
     >
@@ -1978,19 +1978,19 @@ pages.get("/search", async (c) => {
         lede={
           total === 0
             ? "Nothing matches that yet."
-            : `${plural(total, "result", "results")}, in four groups: communities, gatherings, countries and cities.`
+            : `${plural(total, "result", "results")}, in four groups: communities, events, countries and cities.`
         }
       />
 
       <Section index={2} label="Search" title="Search again">
-        <SearchField value={term} hint="A country, a city, a community or a gathering." />
+        <SearchField value={term} hint="A country, a city, a community or an event." />
       </Section>
 
       {total === 0 ? (
         <Section index={3} label="Nothing" title="No matches">
           <NoResults
             title={`Nothing matches "${term}".`}
-            note="The search reads community names, taglines and descriptions, gathering titles and summaries, and the names of cities and countries."
+            note="The search reads community names, taglines and descriptions, event titles and summaries, and the names of cities and countries."
           />
         </Section>
       ) : (
@@ -2005,16 +2005,16 @@ pages.get("/search", async (c) => {
             ) : (
               <>
                 <CardGrid>
-                  {communities.map((circle) => (
-                    <CircleCard
-                      slug={circle.slug}
-                      coverKey={circle.coverKey}
-                      name={circle.name}
-                      tagline={circle.tagline}
-                      city={circle.city}
-                      category={circle.category}
-                      memberCount={circle.memberCount}
-                      isPrivate={circle.isPrivate}
+                  {communities.map((community) => (
+                    <CommunityCard
+                      slug={community.slug}
+                      coverKey={community.coverKey}
+                      name={community.name}
+                      tagline={community.tagline}
+                      city={community.city}
+                      category={community.category}
+                      memberCount={community.memberCount}
+                      isPrivate={community.isPrivate}
                     />
                   ))}
                 </CardGrid>
@@ -2025,17 +2025,17 @@ pages.get("/search", async (c) => {
 
           <Section
             index={4}
-            label="Gatherings"
-            title={plural(gatherings.length, "gathering", "gatherings")}
+            label="Events"
+            title={plural(events.length, "event", "events")}
           >
-            {gatherings.length === 0 ? (
+            {events.length === 0 ? (
               <GroupEmpty
-                note={`No gathering matches "${term}". Only dates that have not started yet are searched.`}
+                note={`No event matches "${term}". Only dates that have not started yet are searched.`}
               />
             ) : (
               <>
-                <Ledger groups={toLedgerGroups(gatherings)} />
-                {capped(gatherings.length)}
+                <Ledger groups={toLedgerGroups(events)} />
+                {capped(events.length)}
               </>
             )}
           </Section>
@@ -2051,7 +2051,7 @@ pages.get("/search", async (c) => {
             ) : (
               <PlaceRow
                 label="Countries that match"
-                noun="gathering"
+                noun="event"
                 options={countries.map((row) => ({
                   label: row.country,
                   href: `/countries/${encodeURIComponent(row.country)}`,
@@ -2068,7 +2068,7 @@ pages.get("/search", async (c) => {
             ) : (
               <PlaceRow
                 label="Cities that match"
-                noun="gathering"
+                noun="event"
                 options={cities.map((row) => ({
                   label: row.city,
                   href: `/cities/${encodeURIComponent(row.city)}`,
@@ -2133,7 +2133,7 @@ function JoinPage(props: { form: JoinForm; user: LayoutUser; flash: Flash | null
             </p>
             <h1 class="h-page">Join</h1>
             <p class="invitation" style="margin-block-start:var(--s5)">
-              Most people arrive here because a member told them to.
+              Anyone can join. Two fields, and you are in.
             </p>
 
             <form
@@ -2184,13 +2184,13 @@ function JoinPage(props: { form: JoinForm; user: LayoutUser; flash: Flash | null
               <p class="micro">Membership terms</p>
               <ul class="stack" style="margin-block-start:var(--s4)">
                 <li class="meta">
-                  Membership costs nothing. You pay for passes, one circle at a time.
+                  Membership costs nothing. You pay for packages, one community at a time.
                 </li>
                 <li class="meta">
-                  One credit takes one place. Cancel the place and the credit comes back.
+                  One ticket takes one place. Cancel the place and the ticket comes back.
                 </li>
                 <li class="meta">
-                  Private circles are approved by the host, by hand, and can say no.
+                  Private communities are approved by the host, by hand, and can say no.
                 </li>
                 <li class="meta">
                   Other members see your name and your one-line headline, nothing else.
@@ -2202,8 +2202,8 @@ function JoinPage(props: { form: JoinForm; user: LayoutUser; flash: Flash | null
               <p class="micro">What happens next</p>
               <p class="meta" style="margin-block-start:var(--s4)">
                 You are signed in the moment you continue. There is no password and nothing to
-                confirm by email. Your account page holds your passes, your credits and your
-                tickets.
+                confirm by email. Your account page holds your packages, your tickets and the
+                places you hold.
               </p>
             </div>
           </div>
@@ -2273,26 +2273,26 @@ pages.post("/auth/logout", async (c) => {
   return c.redirect("/", 302);
 });
 
-pages.post("/circles/:slug/join", async (c) => {
+pages.post("/communities/:slug/join", async (c) => {
   const slug = c.req.param("slug");
   const body = await c.req.parseBody();
   const next = safeNext(typeof body.next === "string" ? body.next : undefined);
-  const back = next ?? `/circles/${slug}`;
+  const back = next ?? `/communities/${slug}`;
 
   const me = await currentUser(c);
   if (!me) return c.redirect(`/join?next=${encodeURIComponent(back)}`, 302);
 
-  const found = await getCircleBySlug(c.env, slug);
+  const found = await getCommunityBySlug(c.env, slug);
   if (!found) {
-    return notFoundPage(c, me, "No such circle", `Nothing here answers to "${slug}".`);
+    return notFoundPage(c, me, "No such community", `Nothing here answers to "${slug}".`);
   }
-  const { circle, host } = found;
+  const { community, host } = found;
 
   // Both of these are "nothing happened", so they carry the `warn` tone: a
   // no-op rendered in the confirmation band reads as a second success.
-  const membership = await getMembership(c.env, circle.id, me.user.id);
+  const membership = await getMembership(c.env, community.id, me.user.id);
   if (membership?.status === "approved") {
-    await setFlash(c.env, me.session.id, flashMessage("warn", `You are already in ${circle.name}.`));
+    await setFlash(c.env, me.session.id, flashMessage("warn", `You are already in ${community.name}.`));
     return c.redirect(back, 302);
   }
   if (membership?.status === "pending") {
@@ -2306,12 +2306,12 @@ pages.post("/circles/:slug/join", async (c) => {
 
   // No service owns this insert: `src/services/` reads memberships, and
   // `purchase()` writes one inside its own batch, but there is no join(). One
-  // parameterised statement, and the unique index on (circle, member) makes a
+  // parameterised statement, and the unique index on (community, member) makes a
   // double submit a no-op rather than a second row.
-  const status: MembershipStatus = circle.isPrivate ? "pending" : "approved";
+  const status: MembershipStatus = community.isPrivate ? "pending" : "approved";
   await getDb(c.env)
-    .insert(circleMembers)
-    .values({ id: newId(), circleId: circle.id, userId: me.user.id, role: "member", status })
+    .insert(communityMembers)
+    .values({ id: newId(), communityId: community.id, userId: me.user.id, role: "member", status })
     .onConflictDoNothing();
 
   await setFlash(
@@ -2320,8 +2320,8 @@ pages.post("/circles/:slug/join", async (c) => {
     flashMessage(
       "confirm",
       status === "approved"
-        ? `You are in ${circle.name}. A pass buys the credits that take a place.`
-        : `Your request is with ${firstName(host.name)}. ${circle.name} approves members by hand.`,
+        ? `You are in ${community.name}. A package buys the tickets that take a place.`
+        : `Your request is with ${firstName(host.name)}. ${community.name} approves members by hand.`,
     ),
   );
   return c.redirect(back, 302);

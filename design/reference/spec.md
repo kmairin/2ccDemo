@@ -4,10 +4,10 @@
 > everything in this file. Kept only because the screen list and the
 > vocabulary section are still accurate.
 
-# 2CC — the members' circle
+# 2CC — the members' community
 
-A private events platform for people who travel. Communities ("circles") run
-gatherings; members buy passes and attend. Think Airbnb Experiences crossed with
+A private events platform for people who travel. Communities ("communities") run
+events; members buy packages and attend. Think Airbnb Experiences crossed with
 a yacht club's calendar — for a small, selective membership rather than the
 public.
 
@@ -33,41 +33,41 @@ chef's table, a day on someone's boat, a members-only strength class.
 
 Two sides of the product:
 
-- **Members** — browse circles, request to join, buy a pass, book a gathering.
-- **Hosts** — run a circle, publish gatherings, price passes, approve members,
+- **Members** — browse communities, request to join, buy a package, book an event.
+- **Hosts** — run a community, publish events, price packages, approve members,
   see who is coming.
 
 ## Vocabulary (use these words in the UI)
 
 | Word | Means |
 | --- | --- |
-| **Circle** | a community — "Adriatic Sailing Society", "The Cold Room" |
-| **Gathering** | an event a circle runs at a date, time and venue |
-| **Pass** | prepaid credits for one circle: **Single (1)**, **Trio (3)**, **Season (6)** |
+| **Community** | a community — "Adriatic Sailing Society", "The Cold Room" |
+| **Event** | an event a community runs at a date, time and venue |
+| **Package** | prepaid tickets for one community: **Single (1)**, **Trio (3)**, **Season (6)** |
 | **Member** | a signed-in person |
-| **Host** | the member who runs a circle |
+| **Host** | the member who runs a community |
 
-A pass is scoped to one circle. Booking a gathering spends one credit from a
-pass for that circle. Cancelling returns the credit.
+A package is scoped to one community. Booking an event spends one ticket from a
+package for that community. Cancelling returns the ticket.
 
 ## Screens
 
 1. **Landing `/`** — hero statement, how it works in three steps, featured
-   circles, next gatherings, a quiet note that membership is by invitation.
-2. **Circles `/circles`** — filterable card grid (all / sailing / wellness /
+   communities, next events, a quiet note that membership is by invitation.
+2. **Communities `/communities`** — filterable card grid (all / sailing / wellness /
    dining / sport / art), city and member count on each card.
-3. **Circle `/circles/:slug`** — cover, host, the story, upcoming gatherings,
-   the three passes with prices, join / request-to-join.
-4. **Gatherings `/events`** — the whole calendar, soonest first.
-5. **Gathering `/events/:slug`** — cover, when/where, description, capacity and
-   places left, the circle it belongs to, book button.
+3. **Community `/communities/:slug`** — cover, host, the story, upcoming events,
+   the three packages with prices, join / request-to-join.
+4. **Events `/events`** — the whole calendar, soonest first.
+5. **Event `/events/:slug`** — cover, when/where, description, capacity and
+   places left, the community it belongs to, book button.
 6. **Join `/join`** — the sign-in. Email + name, framed as an invitation.
-7. **Account `/account`** — passes and credits left, upcoming bookings, circles
+7. **Account `/account`** — packages and tickets left, upcoming bookings, communities
    joined, ticket links.
 8. **Ticket `/account/tickets/:code`** — a single confirmation, code shown large.
-9. **Host console `/host`** — my circles, create a circle.
-10. **Manage circle `/host/circles/:slug`** — publish a gathering, set passes,
-    approve pending members, see attendees per gathering.
+9. **Host console `/host`** — my communities, create a community.
+10. **Manage community `/host/communities/:slug`** — publish an event, set packages,
+    approve pending members, see attendees per event.
 
 ## Look and feel
 
@@ -84,18 +84,18 @@ Dark, editorial, generous whitespace. Nothing shouts.
 --brass-lit #E0C88A    hover
 ```
 
-- **Display type:** Fraunces (serif) — headlines, circle names, prices.
+- **Display type:** Fraunces (serif) — headlines, community names, prices.
 - **UI type:** Inter — everything else.
 - **Small caps + letter-spacing** for labels and metadata. This is the main
   "expensive" signal, along with hairline rules in `--brass`.
 - **Cover art:** no photography available, so covers are generated — a
-  deterministic gradient per circle/gathering derived from its slug, with a fine
+  deterministic gradient per community/event derived from its slug, with a fine
   grain overlay. They must look intentional, not like a missing image.
 - Mobile-first. Everything readable at 375px, comfortable at 1280px.
 - Motion: almost none. A slow fade or a hairline that lights up on hover.
 
 ## Non-goals for this build
 
-- No real payments. Buying a pass is a mock checkout that records an order.
+- No real payments. Buying a package is a mock checkout that records an order.
 - No email sending. Sign-in is email + name, no password, no magic link.
 - No photo uploads. Covers are generated.

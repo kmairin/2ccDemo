@@ -4,7 +4,7 @@
  * Most of this suite is deliberately integration-level: it compares what a page
  * or an endpoint renders against what the database actually holds, in the same
  * test. That is what caught a correlated subquery silently returning 0 for every
- * circle's member count — a bug that typechecked, looked plausible in the JSON,
+ * community's member count — a bug that typechecked, looked plausible in the JSON,
  * and no mock would have exposed.
  *
  * The deploy pipeline runs `npm test` on a runner with **no database**, and

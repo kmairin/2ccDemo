@@ -1,14 +1,14 @@
 /**
- * Reading gatherings: the list, one gathering, a circle's gatherings, and the
+ * Reading events: the list, one event, a community's events, and the
  * month the calendar draws.
  *
  * `placesLeft` is computed here from `placesLeft()` in `./common`, never
- * open-coded, so the directory, the gathering page and the calendar all print
+ * open-coded, so the directory, the event page and the calendar all print
  * the same number.
  */
 import { and, asc, eq, gte, ilike, lt, or, type SQL } from "drizzle-orm";
 import { getDb, type DatabaseEnv } from "../db";
-import { circles, events, photos, type EventStatus } from "../schema";
+import { communities, events, photos, type EventStatus } from "../schema";
 import {
   boundLimit,
   confirmedBookingCount,
@@ -17,9 +17,9 @@ import {
   placesLeft,
   utcDateKey,
 } from "./common";
-import type { PhotoPlate } from "./circles";
+import type { PhotoPlate } from "./communities";
 
-/** A gathering as a card shows it. Matches the contract's list item. */
+/** An event as a card shows it. Matches the contract's list item. */
 export interface EventSummary {
   id: string;
   slug: string;
@@ -34,18 +34,18 @@ export interface EventSummary {
   coverKey: string | null;
   /** capacity − confirmed bookings, floored at zero. */
   placesLeft: number;
-  circle: { slug: string; name: string };
+  community: { slug: string; name: string };
 }
 
-/** The gathering page needs the long copy and the status as well. */
+/** The event page needs the long copy and the status as well. */
 export interface EventDetail extends EventSummary {
   description: string;
   status: EventStatus;
-  circleId: string;
+  communityId: string;
 }
 
-/** The circle a gathering belongs to, as the gathering page kicker needs it. */
-export interface EventCircle {
+/** The community an event belongs to, as the event page kicker needs it. */
+export interface EventCommunity {
   id: string;
   slug: string;
   name: string;
@@ -79,8 +79,8 @@ const summaryColumns = {
   endsAt: events.endsAt,
   capacity: events.capacity,
   confirmed: confirmedBookingCount(events.id),
-  circleSlug: circles.slug,
-  circleName: circles.name,
+  communitySlug: communities.slug,
+  communityName: communities.name,
 };
 
 type SummaryRow = {
@@ -95,8 +95,8 @@ type SummaryRow = {
   capacity: number;
   coverKey: string | null;
   confirmed: number;
-  circleSlug: string;
-  circleName: string;
+  communitySlug: string;
+  communityName: string;
 };
 
 function toSummary(row: SummaryRow): EventSummary {
@@ -112,15 +112,15 @@ function toSummary(row: SummaryRow): EventSummary {
     capacity: Number(row.capacity),
     coverKey: row.coverKey,
     placesLeft: placesLeft(row.capacity, row.confirmed),
-    circle: { slug: row.circleSlug, name: row.circleName },
+    community: { slug: row.communitySlug, name: row.communityName },
   };
 }
 
 /**
  * Published only, soonest first.
  *
- * `circleSlug` narrows it to one circle. `city` is where the gathering is
- * actually held; `country` is the country of the circle that runs it, because
+ * `communitySlug` narrows it to one community. `city` is where the event is
+ * actually held; `country` is the country of the community that runs it, because
  * `events` carries no country of its own — the one definition of a place, set
  * out in `./common`. `from` drops anything that has already started, in SQL,
  * so a count taken from this list is a count of what is still to come.
@@ -132,7 +132,7 @@ function toSummary(row: SummaryRow): EventSummary {
 export async function listEvents(
   env: DatabaseEnv,
   options: {
-    circleSlug?: string;
+    communitySlug?: string;
     city?: string;
     country?: string;
     from?: Date;
@@ -141,15 +141,15 @@ export async function listEvents(
 ): Promise<EventSummary[]> {
   const db = getDb(env);
   const filters: SQL[] = [eq(events.status, "published")];
-  if (options.circleSlug) filters.push(eq(circles.slug, options.circleSlug));
+  if (options.communitySlug) filters.push(eq(communities.slug, options.communitySlug));
   if (options.city) filters.push(ilike(events.city, likeExact(options.city)));
-  if (options.country) filters.push(ilike(circles.country, likeExact(options.country)));
+  if (options.country) filters.push(ilike(communities.country, likeExact(options.country)));
   if (options.from) filters.push(gte(events.startsAt, options.from));
 
   const rows = await db
     .select(summaryColumns)
     .from(events)
-    .innerJoin(circles, eq(circles.id, events.circleId))
+    .innerJoin(communities, eq(communities.id, events.communityId))
     .where(and(...filters))
     .orderBy(asc(events.startsAt), asc(events.slug))
     .limit(boundLimit(options.limit));
@@ -157,8 +157,8 @@ export async function listEvents(
 }
 
 /**
- * Free-text search over the gatherings: title, summary, city, and the country
- * of the circle that runs it, so "Thailand" finds the evening in Bangkok.
+ * Free-text search over the events: title, summary, city, and the country
+ * of the community that runs it, so "Thailand" finds the evening in Bangkok.
  * Published only, soonest first — a search result you cannot book is noise.
  *
  * `ilike` binds every pattern as a parameter; nothing here is concatenated
@@ -181,45 +181,45 @@ export async function searchEvents(
     ilike(events.summary, pattern),
     ilike(events.city, pattern),
     ilike(events.venue, pattern),
-    ilike(circles.country, pattern),
+    ilike(communities.country, pattern),
   );
   if (matched) filters.push(matched);
 
   const rows = await db
     .select(summaryColumns)
     .from(events)
-    .innerJoin(circles, eq(circles.id, events.circleId))
+    .innerJoin(communities, eq(communities.id, events.communityId))
     .where(and(...filters))
     .orderBy(asc(events.startsAt), asc(events.slug))
     .limit(boundLimit(options.limit));
   return rows.map(toSummary);
 }
 
-/** A circle's own gatherings, for the circle page. Published only. */
-export async function listEventsForCircle(
+/** A community's own events, for the community page. Published only. */
+export async function listEventsForCommunity(
   env: DatabaseEnv,
-  circleId: string,
+  communityId: string,
   options: { limit?: number } = {},
 ): Promise<EventSummary[]> {
   const db = getDb(env);
   const rows = await db
     .select(summaryColumns)
     .from(events)
-    .innerJoin(circles, eq(circles.id, events.circleId))
-    .where(and(eq(events.circleId, circleId), eq(events.status, "published")))
+    .innerJoin(communities, eq(communities.id, events.communityId))
+    .where(and(eq(events.communityId, communityId), eq(events.status, "published")))
     .orderBy(asc(events.startsAt), asc(events.slug))
     .limit(boundLimit(options.limit));
   return rows.map(toSummary);
 }
 
 /**
- * One gathering by slug, with its circle. Any status — a draft is still
+ * One event by slug, with its community. Any status — a draft is still
  * reachable by its host, and the caller decides what to do with that.
  */
 export async function getEventBySlug(
   env: DatabaseEnv,
   slug: string,
-): Promise<{ event: EventDetail; circle: EventCircle } | null> {
+): Promise<{ event: EventDetail; community: EventCommunity } | null> {
   const db = getDb(env);
   const [row] = await db
     .select({
@@ -227,15 +227,15 @@ export async function getEventBySlug(
       description: events.description,
       status: events.status,
     coverKey: events.coverKey,
-      circleId: circles.id,
-      circleTagline: circles.tagline,
-      circleCity: circles.city,
-      circleCountry: circles.country,
-      circleCategory: circles.category,
-      circleIsPrivate: circles.isPrivate,
+      communityId: communities.id,
+      communityTagline: communities.tagline,
+      communityCity: communities.city,
+      communityCountry: communities.country,
+      communityCategory: communities.category,
+      communityIsPrivate: communities.isPrivate,
     })
     .from(events)
-    .innerJoin(circles, eq(circles.id, events.circleId))
+    .innerJoin(communities, eq(communities.id, events.communityId))
     .where(eq(events.slug, slug))
     .limit(1);
   if (!row) return null;
@@ -245,22 +245,22 @@ export async function getEventBySlug(
       ...toSummary(row),
       description: row.description,
       status: row.status,
-      circleId: row.circleId,
+      communityId: row.communityId,
     },
-    circle: {
-      id: row.circleId,
-      slug: row.circleSlug,
-      name: row.circleName,
-      tagline: row.circleTagline,
-      city: row.circleCity,
-      country: row.circleCountry,
-      category: row.circleCategory,
-      isPrivate: row.circleIsPrivate,
+    community: {
+      id: row.communityId,
+      slug: row.communitySlug,
+      name: row.communityName,
+      tagline: row.communityTagline,
+      city: row.communityCity,
+      country: row.communityCountry,
+      category: row.communityCategory,
+      isPrivate: row.communityIsPrivate,
     },
   };
 }
 
-/** The gallery for a gathering. 3–5 plates in practice. */
+/** The gallery for an event. 3–5 plates in practice. */
 export async function listEventPhotos(
   env: DatabaseEnv,
   eventId: string,
@@ -299,7 +299,7 @@ export function currentMonthKey(now: Date): string {
 }
 
 /**
- * Every day of one month, each with its published gatherings in time order.
+ * Every day of one month, each with its published events in time order.
  *
  * Empty days are present with an empty list: the month view draws a grid, and a
  * missing key there is a hole rather than a quiet evening. Grouping is by UTC
@@ -318,7 +318,7 @@ export async function listCalendarMonth(
   const rows = await db
     .select(summaryColumns)
     .from(events)
-    .innerJoin(circles, eq(circles.id, events.circleId))
+    .innerJoin(communities, eq(communities.id, events.communityId))
     .where(
       and(
         eq(events.status, "published"),

@@ -1,11 +1,11 @@
 /**
  * The signed-in member's own surface: what they hold, what they booked, and
- * the two steps that move money and credits.
+ * the two steps that move money and tickets.
  *
  *   GET  /account
  *   GET  /account/tickets/:code
- *   GET  /circles/:slug/passes/:packageId/checkout
- *   POST /circles/:slug/passes/:packageId/buy
+ *   GET  /communities/:slug/packages/:packageId/checkout
+ *   POST /communities/:slug/packages/:packageId/buy
  *   POST /events/:slug/book
  *   POST /events/:slug/ticket
  *   POST /account/tickets/:code/cancel
@@ -22,15 +22,15 @@
  *
  * Two rules from `design/reference/design-decisions.md` shape the reads:
  *
- *   - **Credits are grouped by circle and never totalled across them** (§5). A
- *     pass is scoped to one circle, so a combined number would be a figure
+ *   - **Tickets are grouped by community and never totalled across them** (§5). A
+ *     package is scoped to one community, so a combined number would be a figure
  *     nobody can spend.
  *   - **Nothing is hand-formatted.** Dates and money go through
  *     `src/lib/format.ts`, so the ticket, the ledger and the checkout agree.
  *
  * A few reads are queried here rather than through `src/services/`: which order
- * a pass came from, the host a request is waiting on, the next gathering per
- * circle. The service layer is owned elsewhere and returns none of those
+ * a package came from, the host a request is waiting on, the next event per
+ * community. The service layer is owned elsewhere and returns none of those
  * columns, and `src/db.ts` is explicit that queries may live in a route. Every
  * one of them carries a LIMIT (AGENTS.md §5).
  */
@@ -49,12 +49,12 @@ import {
 } from "../auth";
 import { getDb, type DatabaseEnv } from "../db";
 import { placeLabel, formatDateRange, formatDay, formatMoney, formatTime, relativeDay } from "../lib/format";
-import { bookings, circleMembers, circles, events, orders, packages, passes, users } from "../schema";
-import { getCircleBySlug } from "../services/circles";
+import { bookings, communityMembers, communities, events, orders, packages, memberPackages, users } from "../schema";
+import { getCommunityBySlug } from "../services/communities";
 import {
   book,
   cancel,
-  getPackageForCircle,
+  getPackageForCommunity,
   listBookingsForUser,
   purchase,
   purchaseTicket,
@@ -62,8 +62,8 @@ import {
 } from "../services/commerce";
 import { listEvents } from "../services/events";
 import { listMembershipsForUser, type MembershipSummary } from "../services/members";
-import { CheckoutSummary, CreditSquares, TicketPlate } from "../ui/booking";
-import { Alert, Badge, Button, EmptyState, Hero, PassCard, PassGrid, Section } from "../ui/components";
+import { CheckoutSummary, TicketSquares, TicketPlate } from "../ui/booking";
+import { Alert, Badge, Button, EmptyState, Hero, PackageCard, PackageGrid, Section } from "../ui/components";
 import { Layout } from "../ui/layout";
 import profile from "./profile";
 
@@ -84,9 +84,9 @@ const ROW_LIMIT = 50;
 
 /**
  * The cancellation deadline printed on the ticket is **the start of the
- * gathering**, because that is the deadline the product actually enforces:
- * `cancel()` in `src/services/commerce.ts` always hands the credit back, and
- * this page stops offering the release once the gathering has begun. An
+ * event**, because that is the deadline the product actually enforces:
+ * `cancel()` in `src/services/commerce.ts` always hands the ticket back, and
+ * this page stops offering the release once the event has begun. An
  * earlier, prettier deadline would be a number the app does not keep.
  */
 function cancelDeadline(startsAt: Date): Date {
@@ -94,7 +94,7 @@ function cancelDeadline(startsAt: Date): Date {
 }
 
 /**
- * What to bring, by the circle's category.
+ * What to bring, by the community's category.
  *
  * `events` has no column for it and this worker does not own `src/schema.ts`.
  * A ticket that cannot say what to bring is a code on a page rather than an
@@ -173,7 +173,7 @@ function notFoundPage(
             Your account
           </Button>
           <Button href="/events" variant="quiet">
-            All gatherings
+            All events
           </Button>
         </div>
       </Section>
@@ -192,7 +192,7 @@ function notFoundPage(
 const NOWRAP = "white-space:nowrap";
 
 /**
- * `.pass-table` is `width:100%`, so inside a `.scroll-x` box it can never be
+ * `.package-table` is `width:100%`, so inside a `.scroll-x` box it can never be
  * wider than the box — it squeezes the flexible columns to one character per
  * line instead. A minimum width is what makes the box actually scroll, which is
  * §10.4's answer for content that genuinely cannot wrap. Measured at 375.
@@ -201,22 +201,22 @@ function wide(rem: number): string {
   return `min-width:${rem}rem`;
 }
 
-/** `3 gatherings · €120 each` — the derivation §6 asks every price to show. */
-function derivation(credits: number, priceCents: number, currency: string): string {
-  const each = formatMoney(Math.round(priceCents / Math.max(1, credits)), currency);
-  return `${credits} ${credits === 1 ? "gathering" : "gatherings"} · ${each} each`;
+/** `3 events · €120 each` — the derivation §6 asks every price to show. */
+function derivation(tickets: number, priceCents: number, currency: string): string {
+  const each = formatMoney(Math.round(priceCents / Math.max(1, tickets)), currency);
+  return `${tickets} ${tickets === 1 ? "event" : "events"} · ${each} each`;
 }
 
 /* ------------------------------------------------------------------- reads */
 
-/** A pass a member holds, with the order it came from. */
-type HeldPass = {
-  passId: string;
-  circleSlug: string;
-  circleName: string;
+/** A package a member holds, with the order it came from. */
+type HeldPackage = {
+  memberPackageId: string;
+  communitySlug: string;
+  communityName: string;
   packageName: string;
-  creditsTotal: number;
-  creditsUsed: number;
+  ticketsTotal: number;
+  ticketsUsed: number;
   amountCents: number;
   currency: string;
   reference: string;
@@ -224,63 +224,63 @@ type HeldPass = {
 };
 
 /**
- * Every pass this member holds, with the order that created it. The account
- * page shows what was bought, when and for how much; `listPassesForUser`
+ * Every package this member holds, with the order that created it. The account
+ * page shows what was bought, when and for how much; `listPackagesForUser`
  * (which the JSON API uses) carries none of that.
  */
-async function listHeldPasses(env: DatabaseEnv, userId: string): Promise<HeldPass[]> {
+async function listHeldPackages(env: DatabaseEnv, userId: string): Promise<HeldPackage[]> {
   const db = getDb(env);
   const rows = await db
     .select({
-      passId: passes.id,
-      circleSlug: circles.slug,
-      circleName: circles.name,
+      memberPackageId: memberPackages.id,
+      communitySlug: communities.slug,
+      communityName: communities.name,
       packageName: packages.name,
-      creditsTotal: passes.creditsTotal,
-      creditsUsed: passes.creditsUsed,
+      ticketsTotal: memberPackages.ticketsTotal,
+      ticketsUsed: memberPackages.ticketsUsed,
       amountCents: orders.amountCents,
       currency: orders.currency,
       reference: orders.reference,
       boughtAt: orders.createdAt,
     })
-    .from(passes)
-    .innerJoin(circles, eq(circles.id, passes.circleId))
-    .innerJoin(orders, eq(orders.id, passes.orderId))
+    .from(memberPackages)
+    .innerJoin(communities, eq(communities.id, memberPackages.communityId))
+    .innerJoin(orders, eq(orders.id, memberPackages.orderId))
     .innerJoin(packages, eq(packages.id, orders.packageId))
-    .where(eq(passes.userId, userId))
+    .where(eq(memberPackages.userId, userId))
     .orderBy(desc(orders.createdAt))
     .limit(ROW_LIMIT);
 
   return rows.map((row) => ({
     ...row,
-    creditsTotal: Number(row.creditsTotal),
-    creditsUsed: Number(row.creditsUsed),
+    ticketsTotal: Number(row.ticketsTotal),
+    ticketsUsed: Number(row.ticketsUsed),
     amountCents: Number(row.amountCents),
   }));
 }
 
-/** The soonest published gathering in each circle this member belongs to. */
-type NextGathering = { slug: string; title: string; startsAt: Date };
+/** The soonest published event in each community this member belongs to. */
+type NextEvent = { slug: string; title: string; startsAt: Date };
 
-async function nextGatheringByCircle(
+async function nextEventByCommunity(
   env: DatabaseEnv,
   userId: string,
   now: Date,
-): Promise<Map<string, NextGathering>> {
+): Promise<Map<string, NextEvent>> {
   const db = getDb(env);
   const rows = await db
     .select({
-      circleSlug: circles.slug,
+      communitySlug: communities.slug,
       slug: events.slug,
       title: events.title,
       startsAt: events.startsAt,
     })
     .from(events)
-    .innerJoin(circles, eq(circles.id, events.circleId))
-    .innerJoin(circleMembers, eq(circleMembers.circleId, circles.id))
+    .innerJoin(communities, eq(communities.id, events.communityId))
+    .innerJoin(communityMembers, eq(communityMembers.communityId, communities.id))
     .where(
       and(
-        eq(circleMembers.userId, userId),
+        eq(communityMembers.userId, userId),
         eq(events.status, "published"),
         gte(events.startsAt, now),
       ),
@@ -288,20 +288,20 @@ async function nextGatheringByCircle(
     .orderBy(asc(events.startsAt))
     .limit(ROW_LIMIT);
 
-  // Sorted soonest first, so the first row seen for a circle is its next date.
-  const byCircle = new Map<string, NextGathering>();
+  // Sorted soonest first, so the first row seen for a community is its next date.
+  const byCommunity = new Map<string, NextEvent>();
   for (const row of rows) {
-    if (!byCircle.has(row.circleSlug)) {
-      byCircle.set(row.circleSlug, { slug: row.slug, title: row.title, startsAt: row.startsAt });
+    if (!byCommunity.has(row.communitySlug)) {
+      byCommunity.set(row.communitySlug, { slug: row.slug, title: row.title, startsAt: row.startsAt });
     }
   }
-  return byCircle;
+  return byCommunity;
 }
 
-/** A request still with a host: which circle, who decides, and when it was made. */
+/** A request still with a host: which community, who decides, and when it was made. */
 type PendingRequest = {
-  circleSlug: string;
-  circleName: string;
+  communitySlug: string;
+  communityName: string;
   hostName: string;
   requestedAt: Date;
 };
@@ -314,16 +314,16 @@ async function listPendingRequests(env: DatabaseEnv, userId: string): Promise<Pe
   const db = getDb(env);
   return db
     .select({
-      circleSlug: circles.slug,
-      circleName: circles.name,
+      communitySlug: communities.slug,
+      communityName: communities.name,
       hostName: users.name,
-      requestedAt: circleMembers.createdAt,
+      requestedAt: communityMembers.createdAt,
     })
-    .from(circleMembers)
-    .innerJoin(circles, eq(circles.id, circleMembers.circleId))
-    .innerJoin(users, eq(users.id, circles.hostUserId))
-    .where(and(eq(circleMembers.userId, userId), eq(circleMembers.status, "pending")))
-    .orderBy(asc(circleMembers.createdAt))
+    .from(communityMembers)
+    .innerJoin(communities, eq(communities.id, communityMembers.communityId))
+    .innerJoin(users, eq(users.id, communities.hostUserId))
+    .where(and(eq(communityMembers.userId, userId), eq(communityMembers.status, "pending")))
+    .orderBy(asc(communityMembers.createdAt))
     .limit(ROW_LIMIT);
 }
 
@@ -338,12 +338,12 @@ type Ticket = {
   country: string;
   startsAt: Date;
   endsAt: Date;
-  circleSlug: string;
-  circleName: string;
+  communitySlug: string;
+  communityName: string;
   category: string;
   packageName: string;
-  creditsTotal: number;
-  creditsUsed: number;
+  ticketsTotal: number;
+  ticketsUsed: number;
 };
 
 /**
@@ -360,73 +360,73 @@ async function getTicket(env: DatabaseEnv, userId: string, code: string): Promis
       title: events.title,
       venue: events.venue,
       city: events.city,
-      country: circles.country,
+      country: communities.country,
       startsAt: events.startsAt,
       endsAt: events.endsAt,
-      circleSlug: circles.slug,
-      circleName: circles.name,
-      category: circles.category,
+      communitySlug: communities.slug,
+      communityName: communities.name,
+      category: communities.category,
       packageName: packages.name,
-      creditsTotal: passes.creditsTotal,
-      creditsUsed: passes.creditsUsed,
+      ticketsTotal: memberPackages.ticketsTotal,
+      ticketsUsed: memberPackages.ticketsUsed,
     })
     .from(bookings)
     .innerJoin(events, eq(events.id, bookings.eventId))
-    .innerJoin(circles, eq(circles.id, events.circleId))
-    .innerJoin(passes, eq(passes.id, bookings.passId))
-    .innerJoin(orders, eq(orders.id, passes.orderId))
+    .innerJoin(communities, eq(communities.id, events.communityId))
+    .innerJoin(memberPackages, eq(memberPackages.id, bookings.memberPackageId))
+    .innerJoin(orders, eq(orders.id, memberPackages.orderId))
     .innerJoin(packages, eq(packages.id, orders.packageId))
     .where(and(eq(bookings.code, code), eq(bookings.userId, userId)))
     .limit(1);
   if (!row) return null;
-  return { ...row, creditsTotal: Number(row.creditsTotal), creditsUsed: Number(row.creditsUsed) };
+  return { ...row, ticketsTotal: Number(row.ticketsTotal), ticketsUsed: Number(row.ticketsUsed) };
 }
 
-/** The circle a gathering belongs to — one indexed lookup, for the "full" refusal. */
-async function getEventCircleSlug(env: DatabaseEnv, eventSlug: string): Promise<string | null> {
+/** The community an event belongs to — one indexed lookup, for the "full" refusal. */
+async function getEventCommunitySlug(env: DatabaseEnv, eventSlug: string): Promise<string | null> {
   const db = getDb(env);
   const [row] = await db
-    .select({ circleSlug: circles.slug })
+    .select({ communitySlug: communities.slug })
     .from(events)
-    .innerJoin(circles, eq(circles.id, events.circleId))
+    .innerJoin(communities, eq(communities.id, events.communityId))
     .where(eq(events.slug, eventSlug))
     .limit(1);
-  return row?.circleSlug ?? null;
+  return row?.communitySlug ?? null;
 }
 
 /* ------------------------------------------------------------- the account */
 
-/** One circle's worth of credits: the passes, and the movements behind them. */
-type CircleCredits = {
+/** One community's worth of tickets: the packages, and the movements behind them. */
+type CommunityTickets = {
   slug: string;
   name: string;
-  held: HeldPass[];
-  creditsLeft: number;
+  held: HeldPackage[];
+  ticketsLeft: number;
   spent: BookingSummary[];
   returned: BookingSummary[];
 };
 
 /**
- * Passes and bookings folded together per circle. **No combined total** — a
- * pass is good for one circle, and a number spanning them would lie (§5).
+ * Packages and bookings folded together per community. **No combined total** — a
+ * package is good for one community, and a number spanning them would lie (§5).
  */
-function creditsByCircle(held: HeldPass[], booked: BookingSummary[]): CircleCredits[] {
-  const groups = new Map<string, CircleCredits>();
-  for (const pass of held) {
-    const group = groups.get(pass.circleSlug) ?? {
-      slug: pass.circleSlug,
-      name: pass.circleName,
+function ticketsByCommunity(held: HeldPackage[], booked: BookingSummary[]): CommunityTickets[] {
+  const groups = new Map<string, CommunityTickets>();
+  for (const bought of held) {
+    const group = groups.get(bought.communitySlug) ?? {
+      slug: bought.communitySlug,
+      name: bought.communityName,
       held: [],
-      creditsLeft: 0,
+      ticketsLeft: 0,
       spent: [],
       returned: [],
     };
-    group.held.push(pass);
-    group.creditsLeft += Math.max(0, pass.creditsTotal - pass.creditsUsed);
-    groups.set(pass.circleSlug, group);
+    group.held.push(bought);
+    group.ticketsLeft += Math.max(0, bought.ticketsTotal - bought.ticketsUsed);
+    groups.set(bought.communitySlug, group);
   }
   for (const booking of booked) {
-    const group = groups.get(booking.circleSlug);
+    const group = groups.get(booking.communitySlug);
     if (!group) continue;
     if (booking.status === "confirmed") group.spent.push(booking);
     else group.returned.push(booking);
@@ -435,39 +435,39 @@ function creditsByCircle(held: HeldPass[], booked: BookingSummary[]): CircleCred
 }
 
 /**
- * The ledger for one circle: bought, spent, handed back, and what is left.
- * The credits column adds up to the closing figure, which is the whole point
+ * The ledger for one community: bought, spent, handed back, and what is left.
+ * The tickets column adds up to the closing figure, which is the whole point
  * of showing it.
  */
-function CreditLedger(props: { group: CircleCredits }) {
+function TicketLedger(props: { group: CommunityTickets }) {
   const { group } = props;
   return (
     <div class="bordered scroll-x" tabindex={0} style="margin-block-start:24px">
-      <table class="pass-table" style={wide(30)}>
-        <caption class="vh">Credit ledger for {group.name}</caption>
+      <table class="package-table" style={wide(30)}>
+        <caption class="vh">Ticket ledger for {group.name}</caption>
         <thead style={NOWRAP}>
           <tr>
             <th scope="col">Movement</th>
             <th scope="col">Detail</th>
             <th scope="col">Date</th>
-            <th scope="col">Credits</th>
+            <th scope="col">Tickets</th>
           </tr>
         </thead>
         <tbody>
-          {group.held.map((pass) => (
+          {group.held.map((bought) => (
             <tr>
               <th scope="row" style={NOWRAP}>
                 Bought
               </th>
               <td>
-                {pass.packageName}
-                <span class="pass-derivation num">{pass.reference}</span>
+                {bought.packageName}
+                <span class="package-derivation num">{bought.reference}</span>
               </td>
               <td class="num" style={NOWRAP}>
-                {formatDay(pass.boughtAt)}
+                {formatDay(bought.boughtAt)}
               </td>
               <td class="num" style={NOWRAP}>
-                +{pass.creditsTotal}
+                +{bought.ticketsTotal}
               </td>
             </tr>
           ))}
@@ -509,8 +509,8 @@ function CreditLedger(props: { group: CircleCredits }) {
               <span class="meta">Good for {group.name} only</span>
             </td>
             <td />
-            <td class="num pass-price" style={NOWRAP}>
-              {group.creditsLeft}
+            <td class="num package-price" style={NOWRAP}>
+              {group.ticketsLeft}
             </td>
           </tr>
         </tbody>
@@ -524,11 +524,11 @@ function BookingTable(props: { rows: BookingSummary[]; now: Date; showStatus?: b
   const { rows, now, showStatus } = props;
   return (
     <div class="bordered scroll-x" tabindex={0}>
-      <table class="pass-table" style={wide(28)}>
+      <table class="package-table" style={wide(28)}>
         <thead style={NOWRAP}>
           <tr>
             <th scope="col">Date</th>
-            <th scope="col">Gathering</th>
+            <th scope="col">Event</th>
             <th scope="col">{showStatus === true ? "Standing" : "Ticket"}</th>
           </tr>
         </thead>
@@ -539,12 +539,12 @@ function BookingTable(props: { rows: BookingSummary[]; now: Date; showStatus?: b
               <tr>
                 <td class="num" style={NOWRAP}>
                   {formatDay(startsAt)}
-                  <span class="pass-derivation num">{formatTime(startsAt)}</span>
+                  <span class="package-derivation num">{formatTime(startsAt)}</span>
                 </td>
                 <th scope="row">
                   <a href={`/events/${row.eventSlug}`}>{row.eventTitle}</a>
-                  <span class="pass-derivation">
-                    <a href={`/circles/${row.circleSlug}`}>{row.circleName}</a> ·{" "}
+                  <span class="package-derivation">
+                    <a href={`/communities/${row.communitySlug}`}>{row.communityName}</a> ·{" "}
                     {relativeDay(startsAt, now)}
                   </span>
                 </th>
@@ -569,18 +569,18 @@ function BookingTable(props: { rows: BookingSummary[]; now: Date; showStatus?: b
 type AccountPageProps = {
   user: { name: string; email: string };
   flash: Flash | null;
-  held: HeldPass[];
+  held: HeldPackage[];
   booked: BookingSummary[];
   memberships: MembershipSummary[];
   pending: PendingRequest[];
-  nextByCircle: Map<string, NextGathering>;
+  nextByCommunity: Map<string, NextEvent>;
   now: Date;
 };
 
 function AccountPage(props: AccountPageProps) {
-  const { user, flash, held, booked, memberships, pending, nextByCircle, now } = props;
+  const { user, flash, held, booked, memberships, pending, nextByCommunity, now } = props;
 
-  const groups = creditsByCircle(held, booked);
+  const groups = ticketsByCommunity(held, booked);
   const upcoming = booked.filter(
     (b) => b.status === "confirmed" && new Date(b.startsAt).getTime() >= now.getTime(),
   );
@@ -592,7 +592,7 @@ function AccountPage(props: AccountPageProps) {
   return (
     <Layout
       title="Your account"
-      description="Your passes, your credits and the places you hold."
+      description="Your packages, your tickets and the places you hold."
       user={{ name: user.name }}
       active="account"
     >
@@ -602,7 +602,7 @@ function AccountPage(props: AccountPageProps) {
         index="01"
         label="Account"
         title="Your account"
-        lede="Credits are held per circle. Booking spends one, and cancelling in time puts it back."
+        lede="Tickets are held per community. Booking spends one, and cancelling in time puts it back."
       >
         <p class="meta num">{user.email}</p>
         {/* The email is on this page and on no other. What members see is the
@@ -614,28 +614,28 @@ function AccountPage(props: AccountPageProps) {
 
       <Section
         index="02"
-        label="Credits"
+        label="Tickets"
         title="What you hold"
-        action={{ href: "/circles", label: "Find a circle" }}
+        action={{ href: "/communities", label: "Find a community" }}
       >
         {groups.length === 0 ? (
           <EmptyState
-            title="No passes yet."
-            note="A pass buys credits for one circle. One credit takes one place at one gathering."
-            action={{ href: "/circles", label: "Browse circles" }}
+            title="No packages yet."
+            note="A package buys tickets for one community. One ticket takes one place at one event."
+            action={{ href: "/communities", label: "Browse communities" }}
           />
         ) : (
-          <div class="stack stack--wide" data-credits="">
+          <div class="stack stack--wide" data-tickets="">
             {groups.map((group) => {
-              const next = nextByCircle.get(group.slug);
+              const next = nextByCommunity.get(group.slug);
               return (
-                <div data-circle={group.slug}>
+                <div data-community={group.slug}>
                   <div class="row">
                     <h3 class="h-card">
-                      <a href={`/circles/${group.slug}`}>{group.name}</a>
+                      <a href={`/communities/${group.slug}`}>{group.name}</a>
                     </h3>
                     <span class="micro micro--brass">
-                      {group.creditsLeft} {group.creditsLeft === 1 ? "credit" : "credits"} left
+                      {group.ticketsLeft} {group.ticketsLeft === 1 ? "ticket" : "tickets"} left
                     </span>
                   </div>
                   <p class="meta" style="margin-block-start:8px">
@@ -645,33 +645,33 @@ function AccountPage(props: AccountPageProps) {
                         <span class="num">{formatDay(next.startsAt)}</span>
                       </>
                     ) : (
-                      "No gatherings scheduled yet."
+                      "No events scheduled yet."
                     )}
                   </p>
 
                   <div style="margin-block-start:24px">
-                    <PassGrid>
-                      {group.held.map((pass) => (
-                        <PassCard
-                          name={pass.packageName}
-                          credits={pass.creditsTotal}
-                          price={formatMoney(pass.amountCents, pass.currency)}
-                          derivation={derivation(pass.creditsTotal, pass.amountCents, pass.currency)}
-                          note={`Bought ${formatDay(pass.boughtAt)}`}
+                    <PackageGrid>
+                      {group.held.map((bought) => (
+                        <PackageCard
+                          name={bought.packageName}
+                          tickets={bought.ticketsTotal}
+                          price={formatMoney(bought.amountCents, bought.currency)}
+                          derivation={derivation(bought.ticketsTotal, bought.amountCents, bought.currency)}
+                          note={`Bought ${formatDay(bought.boughtAt)}`}
                         >
                           <div style="margin-block-start:16px">
-                            <CreditSquares
-                              total={pass.creditsTotal}
-                              used={pass.creditsUsed}
-                              label={`${pass.creditsTotal - pass.creditsUsed} of ${pass.creditsTotal} credits left on your ${pass.packageName} for ${group.name}`}
+                            <TicketSquares
+                              total={bought.ticketsTotal}
+                              used={bought.ticketsUsed}
+                              label={`${bought.ticketsTotal - bought.ticketsUsed} of ${bought.ticketsTotal} tickets left on your ${bought.packageName} for ${group.name}`}
                             />
                           </div>
-                        </PassCard>
+                        </PackageCard>
                       ))}
-                    </PassGrid>
+                    </PackageGrid>
                   </div>
 
-                  <CreditLedger group={group} />
+                  <TicketLedger group={group} />
                 </div>
               );
             })}
@@ -683,8 +683,8 @@ function AccountPage(props: AccountPageProps) {
         {upcoming.length === 0 ? (
           <EmptyState
             title="No places booked."
-            note="A credit takes a place. Cancelling before the deadline hands it back."
-            action={{ href: "/events", label: "All gatherings" }}
+            note="A ticket takes a place. Cancelling before the deadline hands it back."
+            action={{ href: "/events", label: "All events" }}
           />
         ) : (
           <div data-upcoming="">
@@ -703,30 +703,30 @@ function AccountPage(props: AccountPageProps) {
         )}
       </Section>
 
-      <Section index="05" label="Circles" title="Circles you are in">
+      <Section index="05" label="Communities" title="Communities you are in">
         {joined.length === 0 ? (
           <EmptyState
-            title="Not in a circle yet."
-            note="Buying a pass on an open circle joins it. A private one asks the host first."
-            action={{ href: "/circles", label: "Browse circles" }}
+            title="Not in a community yet."
+            note="Buying a package on an open community joins it. A private one asks the host first."
+            action={{ href: "/communities", label: "Browse communities" }}
           />
         ) : (
-          <div class="bordered scroll-x" tabindex={0} data-circles="">
-            <table class="pass-table" style={wide(24)}>
+          <div class="bordered scroll-x" tabindex={0} data-communities="">
+            <table class="package-table" style={wide(24)}>
               <thead style={NOWRAP}>
                 <tr>
-                  <th scope="col">Circle</th>
-                  <th scope="col">Next gathering</th>
+                  <th scope="col">Community</th>
+                  <th scope="col">Next event</th>
                 </tr>
               </thead>
               <tbody>
                 {joined.map((m) => {
-                  const next = nextByCircle.get(m.circleSlug);
+                  const next = nextByCommunity.get(m.communitySlug);
                   return (
                     <tr>
                       <th scope="row">
-                        <a href={`/circles/${m.circleSlug}`}>{m.circleName}</a>
-                        <span class="pass-derivation">
+                        <a href={`/communities/${m.communitySlug}`}>{m.communityName}</a>
+                        <span class="package-derivation">
                           <Badge tone={m.role === "host" ? "brass" : "quiet"}>
                             {m.role === "host" ? "Host" : "Member"}
                           </Badge>
@@ -736,7 +736,7 @@ function AccountPage(props: AccountPageProps) {
                         {next !== undefined ? (
                           <>
                             <a href={`/events/${next.slug}`}>{next.title}</a>
-                            <span class="pass-derivation num" style={NOWRAP}>
+                            <span class="package-derivation num" style={NOWRAP}>
                               {formatDay(next.startsAt)}
                             </span>
                           </>
@@ -756,10 +756,10 @@ function AccountPage(props: AccountPageProps) {
           <div style="margin-block-start:48px" data-pending="">
             <h3 class="h-card">Requests with a host</h3>
             <div class="bordered scroll-x" tabindex={0} style="margin-block-start:16px">
-              <table class="pass-table" style={wide(26)}>
+              <table class="package-table" style={wide(26)}>
                 <thead style={NOWRAP}>
                   <tr>
-                    <th scope="col">Circle</th>
+                    <th scope="col">Community</th>
                     <th scope="col">Asked</th>
                     <th scope="col">With</th>
                   </tr>
@@ -768,8 +768,8 @@ function AccountPage(props: AccountPageProps) {
                   {pending.map((request) => (
                     <tr>
                       <th scope="row">
-                        <a href={`/circles/${request.circleSlug}`}>{request.circleName}</a>
-                        <span class="pass-derivation">
+                        <a href={`/communities/${request.communitySlug}`}>{request.communityName}</a>
+                        <span class="package-derivation">
                           <Badge tone="slate">Pending</Badge>
                         </span>
                       </th>
@@ -783,7 +783,7 @@ function AccountPage(props: AccountPageProps) {
               </table>
             </div>
             <p class="meta" style="margin-block-start:16px">
-              A host approves by hand. Browsing carries on meanwhile, and the gathering list opens
+              A host approves by hand. Browsing carries on meanwhile, and the event list opens
               the moment they say yes.
             </p>
           </div>
@@ -798,13 +798,13 @@ account.get("/account", async (c) => {
   if (me instanceof Response) return me;
 
   const now = new Date();
-  const [flash, held, booked, memberships, pending, nextByCircle] = await Promise.all([
+  const [flash, held, booked, memberships, pending, nextByCommunity] = await Promise.all([
     takeFlash(c.env, me.session),
-    listHeldPasses(c.env, me.user.id),
+    listHeldPackages(c.env, me.user.id),
     listBookingsForUser(c.env, me.user.id, { limit: ROW_LIMIT }),
     listMembershipsForUser(c.env, me.user.id, { limit: ROW_LIMIT }),
     listPendingRequests(c.env, me.user.id),
-    nextGatheringByCircle(c.env, me.user.id, now),
+    nextEventByCommunity(c.env, me.user.id, now),
   ]);
 
   pageHeaders(c);
@@ -816,7 +816,7 @@ account.get("/account", async (c) => {
       booked={booked}
       memberships={memberships}
       pending={pending}
-      nextByCircle={nextByCircle}
+      nextByCommunity={nextByCommunity}
       now={now}
     />,
   );
@@ -828,7 +828,7 @@ function TicketPage(props: { user: { name: string }; flash: Flash | null; ticket
   const { user, flash, ticket } = props;
   const cancelBy = cancelDeadline(ticket.startsAt);
   const cancelByLabel = `${formatDay(cancelBy)} · ${formatTime(cancelBy)}`;
-  const creditsLeft = Math.max(0, ticket.creditsTotal - ticket.creditsUsed);
+  const ticketsLeft = Math.max(0, ticket.ticketsTotal - ticket.ticketsUsed);
   const releasable = ticket.status === "confirmed" && ticket.startsAt.getTime() > Date.now();
 
   return (
@@ -844,7 +844,7 @@ function TicketPage(props: { user: { name: string }; flash: Flash | null; ticket
 
       <Hero index="01" label="Ticket" title={ticket.title}>
         <p class="meta">
-          <a href={`/circles/${ticket.circleSlug}`}>{ticket.circleName}</a>
+          <a href={`/communities/${ticket.communitySlug}`}>{ticket.communityName}</a>
         </p>
       </Hero>
 
@@ -853,8 +853,8 @@ function TicketPage(props: { user: { name: string }; flash: Flash | null; ticket
           {ticket.status === "cancelled" ? (
             <div style="margin-block-end:24px">
               <Alert tone="rust">
-                This place was released. The credit went back on your {ticket.packageName} for{" "}
-                {ticket.circleName}.
+                This place was released. The ticket went back on your {ticket.packageName} for{" "}
+                {ticket.communityName}.
               </Alert>
             </div>
           ) : null}
@@ -863,18 +863,18 @@ function TicketPage(props: { user: { name: string }; flash: Flash | null; ticket
             seed={ticket.eventSlug}
             code={ticket.code}
             title={ticket.title}
-            circleName={ticket.circleName}
+            communityName={ticket.communityName}
             when={formatDateRange(ticket.startsAt, ticket.endsAt)}
             venue={ticket.venue}
             address={placeLabel(ticket.city, ticket.country)}
-            passName={`${ticket.packageName} · ${creditsLeft} of ${ticket.creditsTotal} credits left`}
+            packageName={`${ticket.packageName} · ${ticketsLeft} of ${ticket.ticketsTotal} tickets left`}
             bring={BRING[ticket.category]}
             cancelBy={cancelByLabel}
           />
 
           <div class="row" style="margin-block-start:32px">
             <Button href={`/events/${ticket.eventSlug}`} variant="quiet">
-              The gathering
+              The event
             </Button>
             <Button href="/account" variant="quiet">
               Your account
@@ -891,7 +891,7 @@ function TicketPage(props: { user: { name: string }; flash: Flash | null; ticket
                 Release this place
               </Button>
               <p class="action-help" style="margin-block-start:12px">
-                Free right up to the start, <span class="num">{cancelByLabel}</span>. The credit
+                Free right up to the start, <span class="num">{cancelByLabel}</span>. The ticket
                 goes straight back on your {ticket.packageName}.
               </p>
             </form>
@@ -923,23 +923,23 @@ account.get("/account/tickets/:code", async (c) => {
 
 /* ------------------------------------------------------------ mock checkout */
 
-account.get("/circles/:slug/passes/:packageId/checkout", async (c) => {
+account.get("/communities/:slug/packages/:packageId/checkout", async (c) => {
   const me = await requireUser(c);
   if (me instanceof Response) return me;
 
-  const found = await getCircleBySlug(c.env, c.req.param("slug"));
+  const found = await getCommunityBySlug(c.env, c.req.param("slug"));
   if (!found) {
     return notFoundPage(c, me, {
-      title: "No such circle",
-      note: "That circle is not here. The directory lists the ones that are.",
+      title: "No such community",
+      note: "That community is not here. The directory lists the ones that are.",
     });
   }
 
-  const offer = await getPackageForCircle(c.env, found.circle.id, c.req.param("packageId"));
+  const offer = await getPackageForCommunity(c.env, found.community.id, c.req.param("packageId"));
   if (!offer) {
     return notFoundPage(c, me, {
-      title: "No such pass",
-      note: `${found.circle.name} does not sell that pass. Its own three are on the circle page.`,
+      title: "No such package",
+      note: `${found.community.name} does not sell that package. Its own three are on the community page.`,
     });
   }
 
@@ -951,7 +951,7 @@ account.get("/circles/:slug/passes/:packageId/checkout", async (c) => {
   return c.html(
     <Layout
       title={`Confirm — ${offer.name}`}
-      description={`${offer.name} for ${found.circle.name}.`}
+      description={`${offer.name} for ${found.community.name}.`}
       user={{ name: me.user.name }}
     >
       {flash !== null ? <FlashBanner message={flash} /> : null}
@@ -960,25 +960,25 @@ account.get("/circles/:slug/passes/:packageId/checkout", async (c) => {
         index="01"
         label="Checkout"
         title="One step, then it is yours"
-        lede={`${offer.name} for ${found.circle.name}. No card is charged — the demo records the order and issues the credits.`}
+        lede={`${offer.name} for ${found.community.name}. No card is charged — the demo records the order and issues the tickets.`}
       />
 
       <Section index="02" label="Order" title={`${offer.name} · ${price}`}>
         <div data-checkout={offer.id}>
           <CheckoutSummary
-            circleName={found.circle.name}
-            passName={offer.name}
-            credits={offer.credits}
+            communityName={found.community.name}
+            packageName={offer.name}
+            tickets={offer.tickets}
             price={price}
-            perGathering={derivation(offer.credits, offer.priceCents, offer.currency)}
-            action={`/circles/${found.circle.slug}/passes/${offer.id}/buy`}
+            perEvent={derivation(offer.tickets, offer.priceCents, offer.currency)}
+            action={`/communities/${found.community.slug}/packages/${offer.id}/buy`}
             nonce={issuePurchaseNonce()}
             next={next}
           />
           <p class="action-help" style="margin-block-start:24px">
-            {found.circle.isPrivate
-              ? "Credits are good for this circle only. The host still approves members by hand."
-              : "Credits are good for this circle only. Buying joins the circle, so you can book straight away."}
+            {found.community.isPrivate
+              ? "Tickets are good for this community only. The host still approves members by hand."
+              : "Tickets are good for this community only. Buying joins the community, so you can book straight away."}
           </p>
         </div>
       </Section>
@@ -988,29 +988,29 @@ account.get("/circles/:slug/passes/:packageId/checkout", async (c) => {
 
 /* ---------------------------------------------------------------------- buy */
 
-account.post("/circles/:slug/passes/:packageId/buy", async (c) => {
+account.post("/communities/:slug/packages/:packageId/buy", async (c) => {
   const me = await requireUser(c);
   if (me instanceof Response) return me;
 
-  const found = await getCircleBySlug(c.env, c.req.param("slug"));
-  if (!found) return c.json({ error: "Circle not found" }, 404);
+  const found = await getCommunityBySlug(c.env, c.req.param("slug"));
+  if (!found) return c.json({ error: "Community not found" }, 404);
 
   const body = await c.req.parseBody();
   const next = safeNext(typeof body.next === "string" ? body.next : undefined);
   const nonce = typeof body.nonce === "string" && body.nonce !== "" ? body.nonce : undefined;
 
-  // `purchase` writes the order, the pass and — on an open circle — the
+  // `purchase` writes the order, the package and — on an open community — the
   // approved membership in ONE batch, and spends the nonce into
   // `orders.reference`, so a double submit collides on the unique index rather
   // than buying twice.
   const result = await purchase(c.env, {
     userId: me.user.id,
-    circleId: found.circle.id,
+    communityId: found.community.id,
     packageId: c.req.param("packageId"),
     nonce,
   });
 
-  if (result.status === "package_not_found") return c.json({ error: "Pass not found" }, 404);
+  if (result.status === "package_not_found") return c.json({ error: "Package not found" }, 404);
 
   if (result.status === "already_processed") {
     return redirectWith(
@@ -1021,11 +1021,11 @@ account.post("/circles/:slug/passes/:packageId/buy", async (c) => {
     );
   }
 
-  const joined = result.joinedCircle ? ` You are in ${found.circle.name}.` : "";
+  const joined = result.joinedCommunity ? ` You are in ${found.community.name}.` : "";
   return redirectWith(
     c,
     me.session,
-    `${result.credits} ${result.credits === 1 ? "credit" : "credits"} for ${found.circle.name}. Order ${result.reference}, ${formatMoney(result.amountCents, result.currency)}.${joined}`,
+    `${result.tickets} ${result.tickets === 1 ? "ticket" : "tickets"} for ${found.community.name}. Order ${result.reference}, ${formatMoney(result.amountCents, result.currency)}.${joined}`,
     next ?? "/account",
   );
 });
@@ -1045,7 +1045,7 @@ account.post("/events/:slug/book", async (c) => {
       return redirectWith(
         c,
         me.session,
-        `You're going. Ticket ${result.code}, and ${result.creditsLeft} ${result.creditsLeft === 1 ? "credit" : "credits"} left.`,
+        `You're going. Ticket ${result.code}, and ${result.ticketsLeft} ${result.ticketsLeft === 1 ? "ticket" : "tickets"} left.`,
         `/account/tickets/${result.code}`,
       );
 
@@ -1053,22 +1053,22 @@ account.post("/events/:slug/book", async (c) => {
       return redirectWith(
         c,
         me.session,
-        "You already hold this place. No second credit was spent.",
+        "You already hold this place. No second ticket was spent.",
         `/account/tickets/${result.code}`,
       );
 
     // A draft is invisible to members, so it is missing rather than refused.
     case "event_not_found":
     case "not_published":
-      return c.json({ error: "Gathering not found" }, 404);
+      return c.json({ error: "Event not found" }, 404);
 
-    case "no_credits":
-      // The gathering page answers this with the three pass buttons directly
+    case "no_tickets":
+      // The event page answers this with the three package buttons directly
       // under the banner, so the refusal and its fix are on one screen.
       return redirectWith(
         c,
         me.session,
-        flashMessage("warn", "No credits left for this circle. Take a pass below and the place is yours."),
+        flashMessage("warn", "No tickets left for this community. Take a package below and the place is yours."),
         back,
       );
 
@@ -1076,7 +1076,7 @@ account.post("/events/:slug/book", async (c) => {
       return redirectWith(
         c,
         me.session,
-        flashMessage("warn", "Members only. Buying a pass joins an open circle; a private one asks the host first."),
+        flashMessage("warn", "Members only. Buying a package joins an open community; a private one asks the host first."),
         back,
       );
 
@@ -1089,22 +1089,22 @@ account.post("/events/:slug/book", async (c) => {
       );
 
     case "full": {
-      // A refusal with no alternative is a dead end — name the circle's next one.
-      const circleSlug = await getEventCircleSlug(c.env, slug);
+      // A refusal with no alternative is a dead end — name the community's next one.
+      const communitySlug = await getEventCommunitySlug(c.env, slug);
       const now = Date.now();
       const upcoming =
-        circleSlug === null ? [] : await listEvents(c.env, { circleSlug, limit: ROW_LIMIT });
+        communitySlug === null ? [] : await listEvents(c.env, { communitySlug, limit: ROW_LIMIT });
       const nextUp = upcoming.find(
         (e) => e.slug !== slug && e.placesLeft > 0 && new Date(e.startsAt).getTime() > now,
       );
       const offer =
         nextUp === undefined
           ? ""
-          : ` Next from this circle: ${nextUp.title}, ${formatDay(new Date(nextUp.startsAt))}.`;
+          : ` Next from this community: ${nextUp.title}, ${formatDay(new Date(nextUp.startsAt))}.`;
       return redirectWith(
         c,
         me.session,
-        flashMessage("warn", `That gathering is full, and nothing was spent.${offer}`),
+        flashMessage("warn", `That event is full, and nothing was spent.${offer}`),
         back,
       );
     }
@@ -1114,8 +1114,8 @@ account.post("/events/:slug/book", async (c) => {
 /* ------------------------------------------------------------ one ticket */
 
 /**
- * Buy one place at this gathering, without choosing a pass first: the circle's
- * 1-credit pass and the booking, in one submit.
+ * Buy one place at this event, without choosing a package first: the community's
+ * 1-ticket package and the booking, in one submit.
  *
  * All of the work is `purchaseTicket()` in `src/services/commerce.ts` — it
  * calls `purchase()` and then `book()`, checks every refusal before any money
@@ -1166,13 +1166,13 @@ account.post("/events/:slug/ticket", async (c) => {
     // A draft is invisible to members, so it is missing rather than refused.
     case "event_not_found":
     case "not_published":
-      return c.json({ error: "Gathering not found" }, 404);
+      return c.json({ error: "Event not found" }, 404);
 
     case "no_single_package":
       return redirectWith(
         c,
         me.session,
-        flashMessage("warn", "This circle does not sell a single ticket. Its passes are below."),
+        flashMessage("warn", "This community does not sell a single ticket. Its packages are below."),
         back,
       );
 
@@ -1180,7 +1180,7 @@ account.post("/events/:slug/ticket", async (c) => {
       return redirectWith(
         c,
         me.session,
-        flashMessage("warn", "Members only. A private circle asks the host first."),
+        flashMessage("warn", "Members only. A private community asks the host first."),
         back,
       );
 
@@ -1196,7 +1196,7 @@ account.post("/events/:slug/ticket", async (c) => {
       return redirectWith(
         c,
         me.session,
-        flashMessage("warn", "That gathering is full, and nothing was bought."),
+        flashMessage("warn", "That event is full, and nothing was bought."),
         back,
       );
 
@@ -1226,7 +1226,7 @@ account.post("/account/tickets/:code/cancel", async (c) => {
       return redirectWith(
         c,
         me.session,
-        `Place released. The credit is back on your pass, and ticket ${result.code} is void.`,
+        `Place released. The ticket is back on your package, and ticket ${result.code} is void.`,
         "/account",
       );
 

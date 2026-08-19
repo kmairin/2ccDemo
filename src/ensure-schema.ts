@@ -363,8 +363,8 @@ async function missingColumns(env: EnsureEnv): Promise<string[]> {
  */
 async function looksPopulated(env: EnsureEnv): Promise<boolean> {
   const db = getDb(env);
-  const circles = scalar(await db.execute(sql`select count(*)::int from circles`));
-  if (circles === 0) return false;
+  const communities = scalar(await db.execute(sql`select count(*)::int from circles`));
+  if (communities === 0) return false;
   const events = scalar(await db.execute(sql`select count(*)::int from events`));
   if (events === 0) return false;
   return scalar(await db.execute(sql`select count(*)::int from bookings`)) > 0;

@@ -4,7 +4,7 @@
  * These deliberately compare what the API says against what the database
  * actually holds, in the same test. That is not belt-and-braces: a correlated
  * subquery whose outer reference lost its table qualifier returned `0` for every
- * circle's member and gathering count, typechecked clean, and looked entirely
+ * community's member and event count, typechecked clean, and looked entirely
  * plausible in the JSON. Only reading both numbers together caught it.
  *
  * They need Postgres running and `npm run seed` applied. If the database is
@@ -46,17 +46,17 @@ suite("GET /api/health", () => {
   });
 });
 
-suite("GET /api/circles", () => {
-  it("returns the seeded circles", async () => {
-    const { status, body } = await json("/api/circles");
+suite("GET /api/communities", () => {
+  it("returns the seeded communities", async () => {
+    const { status, body } = await json("/api/communities");
     expect(status).toBe(200);
-    expect(Array.isArray(body.circles)).toBe(true);
-    // A vacuous pass is worse than a failure — say the seed is missing.
-    expect(body.circles.length, "no circles: run `npm run seed`").toBeGreaterThan(0);
+    expect(Array.isArray(body.communities)).toBe(true);
+    // A vacuous package is worse than a failure — say the seed is missing.
+    expect(body.communities.length, "no communities: run `npm run seed`").toBeGreaterThan(0);
   });
 
-  it("reports member and gathering counts that match the database", async () => {
-    const { body } = await json("/api/circles");
+  it("reports member and event counts that match the database", async () => {
+    const { body } = await json("/api/communities");
 
     const truth = await sql<{ slug: string; members: number; events: number }[]>`
       select c.slug,
@@ -69,28 +69,28 @@ suite("GET /api/circles", () => {
     const bySlug = new Map(truth.map((r) => [r.slug, r]));
 
     // Guards the exact defect described at the top of this file.
-    for (const circle of body.circles) {
-      const row = bySlug.get(circle.slug);
-      expect(row, `circle ${circle.slug} is not in the database`).toBeDefined();
-      expect(circle.memberCount, `memberCount for ${circle.slug}`).toBe(row!.members);
-      expect(circle.eventCount, `eventCount for ${circle.slug}`).toBe(row!.events);
+    for (const community of body.communities) {
+      const row = bySlug.get(community.slug);
+      expect(row, `community ${community.slug} is not in the database`).toBeDefined();
+      expect(community.memberCount, `memberCount for ${community.slug}`).toBe(row!.members);
+      expect(community.eventCount, `eventCount for ${community.slug}`).toBe(row!.events);
     }
 
     // And at least one must be non-zero, or the assertions above prove nothing.
-    const total = body.circles.reduce(
+    const total = body.communities.reduce(
       (n: number, c: { memberCount: number }) => n + c.memberCount,
       0,
     );
-    expect(total, "every circle has 0 members — counts are not being computed").toBeGreaterThan(0);
+    expect(total, "every community has 0 members — counts are not being computed").toBeGreaterThan(0);
   });
 
   it("rejects a nonsense limit with 400 rather than guessing", async () => {
-    const { status } = await json("/api/circles?limit=banana");
+    const { status } = await json("/api/communities?limit=banana");
     expect(status).toBe(400);
   });
 
-  it("404s for a circle that does not exist", async () => {
-    const { status } = await json("/api/circles/not-a-real-circle");
+  it("404s for a community that does not exist", async () => {
+    const { status } = await json("/api/communities/not-a-real-community");
     expect(status).toBe(404);
   });
 });
@@ -99,7 +99,7 @@ suite("GET /api/events", () => {
   it("computes placesLeft as capacity minus confirmed bookings", async () => {
     const { status, body } = await json("/api/events");
     expect(status).toBe(200);
-    expect(body.events.length, "no gatherings: run `npm run seed`").toBeGreaterThan(0);
+    expect(body.events.length, "no events: run `npm run seed`").toBeGreaterThan(0);
 
     const truth = await sql<{ slug: string; capacity: number; confirmed: number }[]>`
       select e.slug, e.capacity,
@@ -111,14 +111,14 @@ suite("GET /api/events", () => {
 
     for (const event of body.events) {
       const row = bySlug.get(event.slug);
-      expect(row, `gathering ${event.slug} is not in the database`).toBeDefined();
+      expect(row, `event ${event.slug} is not in the database`).toBeDefined();
       expect(event.placesLeft, `placesLeft for ${event.slug}`).toBe(
         Math.max(0, row!.capacity - row!.confirmed),
       );
     }
   });
 
-  it("lists only published gatherings", async () => {
+  it("lists only published events", async () => {
     const { body } = await json("/api/events");
     const drafts = await sql<{ slug: string }[]>`
       select slug from events where status <> 'published'

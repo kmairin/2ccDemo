@@ -5,10 +5,10 @@
  * These assert what a reader would get: the status code, the copy that the
  * contract fixes word for word, and the numbers, compared against what the
  * database actually holds. A page test that only checks for `200` would have
- * passed while every circle showed 0 members.
+ * passed while every community showed 0 members.
  *
  * They need Postgres running and `npm run seed` applied. Where a test has to
- * write (sign in, join a circle) it uses a throwaway address prefixed
+ * write (sign in, join a community) it uses a throwaway address prefixed
  * `pagetest-`, and `afterAll` deletes those members again — the cascade takes
  * their sessions and memberships with them, so the seed is left as it was found.
  */
@@ -80,9 +80,9 @@ function countOf(html: string, needle: RegExp): number {
 /* ------------------------------------------------------------ every page */
 
 const PAGES = [
-  { path: "/", subject: "By invitation" },
-  { path: "/circles", subject: "Circles" },
-  { path: "/events", subject: "Gatherings" },
+  { path: "/", subject: "Communities and events worldwide" },
+  { path: "/communities", subject: "Communities" },
+  { path: "/events", subject: "Events" },
   { path: "/calendar", subject: "Calendar" },
   { path: "/join", subject: "Join" },
 ];
@@ -97,7 +97,7 @@ suite("every public page", () => {
   });
 
   it("is `private, no-cache` and never `no-store` — no-store kills bfcache", async () => {
-    const paths = [...PAGES.map((p) => p.path), "/circles/the-cold-room", "/events/first-light-plunge"];
+    const paths = [...PAGES.map((p) => p.path), "/communities/the-cold-room", "/events/first-light-plunge"];
     for (const path of paths) {
       const { res } = await get(path);
       expect(res.headers.get("cache-control"), `cache-control of ${path}`).toBe("private, no-cache");
@@ -110,9 +110,9 @@ suite("every public page", () => {
       expect(countOf(html, /<h1\b/g), `<h1> count on ${page.path}`).toBe(1);
     }
     const landing = await get("/");
-    expect(landing.html).toContain("Every gathering here has a date");
-    const circles = await get("/circles");
-    expect(circles.html).toMatch(/<h1[^>]*>Circles<\/h1>/);
+    expect(landing.html).toContain("Every event here has a date");
+    const communities = await get("/communities");
+    expect(communities.html).toMatch(/<h1[^>]*>Communities<\/h1>/);
   });
 
   it("names the subject in the <title>", async () => {
@@ -126,23 +126,23 @@ suite("every public page", () => {
 /* -------------------------------------------------------------- landing */
 
 suite("GET /", () => {
-  it("puts the next gatherings above the circles", async () => {
+  it("puts the next events above the communities", async () => {
     const { html } = await get("/");
-    const gatherings = html.indexOf("The next gatherings");
-    const circles = html.indexOf("The circles");
-    expect(gatherings, "the gatherings section is missing").toBeGreaterThan(-1);
-    expect(circles, "the circles section is missing").toBeGreaterThan(-1);
-    expect(gatherings).toBeLessThan(circles);
+    const events = html.indexOf("The next events");
+    const communities = html.indexOf("The communities");
+    expect(events, "the events section is missing").toBeGreaterThan(-1);
+    expect(communities, "the communities section is missing").toBeGreaterThan(-1);
+    expect(events).toBeLessThan(communities);
   });
 
   it("defines all four nouns in the subline", async () => {
     const { html } = await get("/");
-    for (const noun of ["circle is", "gathering is", "pass buys", "credit takes"]) {
+    for (const noun of ["community is", "event is", "package buys", "ticket takes"]) {
       expect(html, `the subline never defines "${noun}"`).toContain(noun);
     }
   });
 
-  it("lists the seeded circles, with the member counts the database holds", async () => {
+  it("lists the seeded communities, with the member counts the database holds", async () => {
     const { html } = await get("/");
     const rows = await sql<{ slug: string; name: string; members: number }[]>`
       select c.slug, c.name,
@@ -150,74 +150,74 @@ suite("GET /", () => {
                where m.circle_id = c.id and m.status = 'approved') as members
       from circles c
     `;
-    expect(rows.length, "no circles: run `npm run seed`").toBeGreaterThan(0);
+    expect(rows.length, "no communities: run `npm run seed`").toBeGreaterThan(0);
     for (const row of rows) {
-      expect(html, `${row.slug} is missing from the landing page`).toContain(`/circles/${row.slug}`);
+      expect(html, `${row.slug} is missing from the landing page`).toContain(`/communities/${row.slug}`);
       // "1 member", not "1 members" — the component pluralises and this
-      // assertion did not, so it failed whenever a one-member circle existed.
+      // assertion did not, so it failed whenever a one-member community existed.
       const members = row.members === 1 ? "1 member" : `${row.members} members`;
       expect(html, `member count for ${row.slug}`).toContain(members);
     }
   });
 });
 
-/* -------------------------------------------------------------- circles */
+/* -------------------------------------------------------------- communities */
 
-suite("GET /circles", () => {
+suite("GET /communities", () => {
   it("filters by category and shows nothing from the others", async () => {
-    const { status, html } = await get("/circles?category=sailing");
+    const { status, html } = await get("/communities?category=sailing");
     expect(status).toBe(200);
 
     const rows = await sql<{ slug: string; category: string }[]>`select slug, category from circles`;
     const sailing = rows.filter((r) => r.category === "sailing");
-    expect(sailing.length, "the seed has no sailing circles").toBeGreaterThan(0);
-    for (const row of sailing) expect(html).toContain(`/circles/${row.slug}`);
+    expect(sailing.length, "the seed has no sailing communities").toBeGreaterThan(0);
+    for (const row of sailing) expect(html).toContain(`/communities/${row.slug}`);
     for (const row of rows.filter((r) => r.category !== "sailing")) {
-      expect(html, `${row.slug} is not a sailing circle`).not.toContain(`"/circles/${row.slug}"`);
+      expect(html, `${row.slug} is not a sailing community`).not.toContain(`"/communities/${row.slug}"`);
     }
   });
 
   it("marks the active filter with aria-current, and is never a pill", async () => {
-    const { html } = await get("/circles?category=wellness");
-    expect(html).toContain('href="/circles?category=wellness" aria-current="page"');
+    const { html } = await get("/communities?category=wellness");
+    expect(html).toContain('href="/communities?category=wellness" aria-current="page"');
     expect(html).toContain('class="filters"');
   });
 
   it("400s on a category that is not one of the five", async () => {
-    const { status, html } = await get("/circles?category=banana");
+    const { status, html } = await get("/communities?category=banana");
     expect(status).toBe(400);
     // Styled page, not a stack trace (§8).
-    expect(html).toContain("<title>Circles · 2CC</title>");
+    expect(html).toContain("<title>Communities · 2CC</title>");
     expect(html).toContain("There is no &quot;banana&quot; category.");
   });
 
   it("treats an empty category as no filter rather than a 400", async () => {
-    const { status } = await get("/circles?category=");
+    const { status } = await get("/communities?category=");
     expect(status).toBe(200);
   });
 });
 
-suite("GET /circles/:slug", () => {
+suite("GET /communities/:slug", () => {
   it("404s for a slug nothing answers to", async () => {
-    const { status, html } = await get("/circles/not-a-real-circle");
+    const { status, html } = await get("/communities/not-a-real-community");
     expect(status).toBe(404);
-    expect(html).toContain("No such circle");
+    expect(html).toContain("No such community");
   });
 
-  it("shows the story, the host, the passes, the gallery and the members", async () => {
-    const { status, html } = await get("/circles/the-cold-room");
+  it("shows the story, the host, the packages, the gallery and the members", async () => {
+    const { status, html } = await get("/communities/the-cold-room");
     expect(status).toBe(200);
 
-    const [circle] = await sql<{ description: string; name: string }[]>`
+    const [community] = await sql<{ description: string; name: string }[]>`
       select description, name from circles where slug = 'the-cold-room'
     `;
-    expect(circle, "the-cold-room is not seeded").toBeDefined();
-    expect(html).toContain(circle!.description);
+    expect(community, "the-cold-room is not seeded").toBeDefined();
+    expect(html).toContain(community!.description);
     expect(html).toContain("Wes Calloway");
 
-    // The three passes are one bordered table, never three pricing cards (§5).
-    expect(html).toContain('class="pass-table"');
-    expect(html).not.toContain('class="pass-grid"');
+    // The three packages are one bordered table, never three pricing cards (§5).
+    expect(html).toContain('class="package-table"');
+    expect(html).not.toContain('class="package-grid"');
 
     // The gate greps for these three.
     expect(html).toContain("data-gallery");
@@ -225,7 +225,7 @@ suite("GET /circles/:slug", () => {
   });
 
   it("agrees with the database about how many members there are", async () => {
-    const { html } = await get("/circles/the-cold-room");
+    const { html } = await get("/communities/the-cold-room");
     const [row] = await sql<{ members: number }[]>`
       select (select count(*)::int from circle_members m
                where m.circle_id = c.id and m.status = 'approved') as members
@@ -253,7 +253,7 @@ suite("GET /circles/:slug", () => {
       .map((r) => r.name);
     expect(rows.some((r) => r.status === "pending"), "no pending request to check").toBe(true);
 
-    const { html } = await get("/circles/nightform");
+    const { html } = await get("/communities/nightform");
     const members = html.slice(html.indexOf("data-members"));
     for (const name of pendingOnly) {
       expect(members, `${name} is pending and must not be listed`).not.toContain(name);
@@ -265,15 +265,15 @@ suite("GET /circles/:slug", () => {
     expect(members).toContain(`${approved.size} members`);
   });
 
-  it("gives a circle with no dates a real empty state, not an apology", async () => {
-    const { status, html } = await get("/circles/es-freus-passage");
+  it("gives a community with no dates a real empty state, not an apology", async () => {
+    const { status, html } = await get("/communities/es-freus-passage");
     expect(status).toBe(200);
-    expect(html).toContain("No gatherings scheduled.");
+    expect(html).toContain("No events scheduled.");
     expect(html).not.toContain("Check back soon");
   });
 });
 
-/* ----------------------------------------------------------- gatherings */
+/* ----------------------------------------------------------- events */
 
 suite("GET /events", () => {
   it("is a ledger with month headers, soonest first", async () => {
@@ -288,7 +288,7 @@ suite("GET /events", () => {
       select slug, starts_at from events where status = 'published' order by starts_at asc
     `;
     const listed = rows.filter((r) => html.includes(`/events/${r.slug}`));
-    expect(listed.length, "no gatherings listed: run `npm run seed`").toBeGreaterThan(0);
+    expect(listed.length, "no events listed: run `npm run seed`").toBeGreaterThan(0);
     const positions = listed.map((r) => html.indexOf(`/events/${r.slug}`));
     expect(positions, "the ledger is not in date order").toEqual([...positions].sort((a, b) => a - b));
   });
@@ -304,12 +304,12 @@ suite("GET /events", () => {
 
 suite("GET /events/:slug", () => {
   it("404s for a slug nothing answers to", async () => {
-    const { status, html } = await get("/events/not-a-real-gathering");
+    const { status, html } = await get("/events/not-a-real-event");
     expect(status).toBe(404);
-    expect(html).toContain("No such gathering");
+    expect(html).toContain("No such event");
   });
 
-  it("404s for a gathering that is not published", async () => {
+  it("404s for an event that is not published", async () => {
     const [draft] = await sql<{ slug: string }[]>`
       select slug from events where status <> 'published' limit 1
     `;
@@ -329,7 +329,7 @@ suite("GET /events/:slug", () => {
     const { html } = await get("/events/first-light-plunge");
     expect(html).toContain(`class="places-left"`);
     expect(html).toContain(`<dd><span class="places-left">${left}</span></dd>`);
-    expect(html).toContain(`1 credit · ${left} of ${row!.capacity} places left`);
+    expect(html).toContain(`1 ticket · ${left} of ${row!.capacity} places left`);
     expect(html).toContain(`${row!.confirmed} of ${row!.capacity} going`);
   });
 
@@ -367,7 +367,7 @@ suite("the action area", () => {
     expect(html).toContain("Sign in to see who&#39;s going");
   });
 
-  it("at capacity: a disabled Full, plus the next date from that circle", async () => {
+  it("at capacity: a disabled Full, plus the next date from that community", async () => {
     const [full] = await sql<{ slug: string }[]>`
       select e.slug from events e
       where e.status = 'published'
@@ -375,46 +375,46 @@ suite("the action area", () => {
                             where b.event_id = e.id and b.status = 'confirmed') <= 0
       limit 1
     `;
-    expect(full, "the seed has no full gathering — §8 requires one").toBeDefined();
+    expect(full, "the seed has no full event — §8 requires one").toBeDefined();
     const { html } = await get(`/events/${full!.slug}`);
     expect(html).toContain("Full");
-    expect(html).toContain("Next from this circle:");
+    expect(html).toContain("Next from this community:");
     expect(html).toContain("disabled");
   });
 
-  it("not a member of a public circle: three passes, headed with the reason", async () => {
+  it("not a member of a public community: three packages, headed with the reason", async () => {
     const cookie = await signInAs("visitor");
     const { html } = await get("/events/first-light-plunge", cookie);
-    expect(html).toContain("Reserve with a pass");
-    expect(html).toContain("Buying a pass joins the circle.");
-    expect(countOf(html, /\/passes\/[^/]+\/checkout/g)).toBeGreaterThanOrEqual(3);
-    // Every pass button comes back to this gathering afterwards.
+    expect(html).toContain("Reserve with a package");
+    expect(html).toContain("Buying a package joins the community.");
+    expect(countOf(html, /\/packages\/[^/]+\/checkout/g)).toBeGreaterThanOrEqual(3);
+    // Every package button comes back to this event afterwards.
     expect(html).toContain("checkout?next=%2Fevents%2Ffirst-light-plunge");
   });
 
-  it("not a member of a private circle: request an invitation, no passes", async () => {
+  it("not a member of a private community: ask the host, no packages", async () => {
     const cookie = await signInAs("outsider");
     const { html } = await get("/events/the-warehouse-hang", cookie);
-    expect(html).toContain("Request an invitation");
-    expect(html).toContain("This circle approves members by hand.");
+    expect(html).toContain("Ask the host to join");
+    expect(html).toContain("This community approves members by hand.");
   });
 
   it("pending: names the host and offers somewhere else to be", async () => {
     const cookie = await signInAs("waiting");
-    const request = await post("/circles/nightform/join", { next: "/circles/nightform" }, cookie);
+    const request = await post("/communities/nightform/join", { next: "/communities/nightform" }, cookie);
     expect(request.status).toBe(302);
     const { html } = await get("/events/the-warehouse-hang", cookie);
     expect(html).toContain("Your request is with");
     expect(html).toContain('href="/events"');
   });
 
-  it("never prints the word credit without a number beside it", async () => {
+  it("never prints the word ticket without a number beside it", async () => {
     const { html } = await get("/events/first-light-plunge");
     const action = html.slice(html.indexOf('class="action"'), html.indexOf("</section>"));
-    const bare = action.match(/(^|[^\d]\s|>)credits?\b/gi) ?? [];
-    // "1 credit ·" and "3 credits" are fine; "your credits" is not.
+    const bare = action.match(/(^|[^\d]\s|>)tickets?\b/gi) ?? [];
+    // "1 ticket ·" and "3 tickets" are fine; "your tickets" is not.
     const offenders = bare.filter((m) => !/\d/.test(m));
-    expect(offenders, `bare "credit": ${offenders.join(", ")}`).toEqual([]);
+    expect(offenders, `bare "ticket": ${offenders.join(", ")}`).toEqual([]);
   });
 });
 
@@ -443,7 +443,7 @@ suite("GET /calendar", () => {
     expect(january.html).toContain('href="/calendar?month=2025-12"');
   });
 
-  it("puts a gathering on the day it actually falls on", async () => {
+  it("puts an event on the day it actually falls on", async () => {
     const [row] = await sql<{ slug: string; title: string; day: number }[]>`
       select slug, title, extract(day from starts_at at time zone 'UTC')::int as day
       from events
@@ -544,7 +544,7 @@ suite("POST /auth/login", () => {
       email: "",
       name: "Typed Already",
       code: "SEA-1904",
-      next: "/circles/nightform",
+      next: "/communities/nightform",
     });
     expect(res.status).toBe(400);
     const html = await res.text();
@@ -552,7 +552,7 @@ suite("POST /auth/login", () => {
     expect(html).toContain("An email address is required.");
     expect(html).toContain('value="Typed Already"');
     expect(html).toContain('value="SEA-1904"');
-    expect(html).toContain('value="/circles/nightform"');
+    expect(html).toContain('value="/communities/nightform"');
     expect(html).toContain('aria-invalid="true"');
     expect(html).toContain('aria-describedby="f-email-error"');
     expect(html).toContain('role="status"');
@@ -593,24 +593,24 @@ suite("POST /auth/logout", () => {
   });
 });
 
-suite("POST /circles/:slug/join", () => {
+suite("POST /communities/:slug/join", () => {
   it("sends a signed-out visitor to the join form, remembering where they were", async () => {
-    const res = await post("/circles/the-cold-room/join", {});
+    const res = await post("/communities/the-cold-room/join", {});
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/join?next=%2Fcircles%2Fthe-cold-room");
+    expect(res.headers.get("location")).toBe("/join?next=%2Fcommunities%2Fthe-cold-room");
   });
 
-  it("404s for a circle that does not exist", async () => {
+  it("404s for a community that does not exist", async () => {
     const cookie = await signInAs("lost");
-    const res = await post("/circles/not-a-real-circle/join", {}, cookie);
+    const res = await post("/communities/not-a-real-community/join", {}, cookie);
     expect(res.status).toBe(404);
   });
 
-  it("approves on a public circle, and says so once", async () => {
+  it("approves on a public community, and says so once", async () => {
     const cookie = await signInAs("joiner");
-    const res = await post("/circles/es-freus-passage/join", {}, cookie);
+    const res = await post("/communities/es-freus-passage/join", {}, cookie);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/circles/es-freus-passage");
+    expect(res.headers.get("location")).toBe("/communities/es-freus-passage");
 
     const [row] = await sql<{ status: string }[]>`
       select m.status from circle_members m
@@ -621,19 +621,19 @@ suite("POST /circles/:slug/join", () => {
     expect(row!.status).toBe("approved");
 
     // The flash is on the session: shown once, above the <h1>, then gone.
-    const first = await get("/circles/es-freus-passage", cookie);
+    const first = await get("/communities/es-freus-passage", cookie);
     expect(first.html).toContain('role="status"');
     expect(first.html).toContain("You are in Es Freus Passage.");
     expect(first.html.indexOf('role="status"')).toBeLessThan(first.html.indexOf("<h1"));
     expect(first.html).not.toContain("Dismiss");
 
-    const second = await get("/circles/es-freus-passage", cookie);
+    const second = await get("/communities/es-freus-passage", cookie);
     expect(second.html, "the flash announced itself twice").not.toContain('role="status"');
   });
 
-  it("leaves a private circle pending, and names the host", async () => {
+  it("leaves a private community pending, and names the host", async () => {
     const cookie = await signInAs("asker");
-    const res = await post("/circles/nightform/join", {}, cookie);
+    const res = await post("/communities/nightform/join", {}, cookie);
     expect(res.status).toBe(302);
 
     const [row] = await sql<{ status: string }[]>`
@@ -644,28 +644,28 @@ suite("POST /circles/:slug/join", () => {
     `;
     expect(row!.status).toBe("pending");
 
-    const { html } = await get("/circles/nightform", cookie);
+    const { html } = await get("/communities/nightform", cookie);
     expect(html).toContain("Your request is with");
   });
 
   it("honours next, and refuses an off-site one", async () => {
     const cookie = await signInAs("nexter");
     const good = await post(
-      "/circles/es-freus-passage/join",
+      "/communities/es-freus-passage/join",
       { next: "/events/first-light-plunge" },
       cookie,
     );
     expect(good.headers.get("location")).toBe("/events/first-light-plunge");
 
-    const bad = await post("/circles/the-cold-room/join", { next: "//evil.example" }, cookie);
-    expect(bad.headers.get("location")).toBe("/circles/the-cold-room");
+    const bad = await post("/communities/the-cold-room/join", { next: "//evil.example" }, cookie);
+    expect(bad.headers.get("location")).toBe("/communities/the-cold-room");
   });
 
   it("a second request adds nothing and says the request is already in", async () => {
     const cookie = await signInAs("twice");
-    await post("/circles/nightform/join", {}, cookie);
-    await get("/circles/nightform", cookie); // clears the first flash
-    await post("/circles/nightform/join", {}, cookie);
+    await post("/communities/nightform/join", {}, cookie);
+    await get("/communities/nightform", cookie); // clears the first flash
+    await post("/communities/nightform/join", {}, cookie);
 
     const rows = await sql<{ n: number }[]>`
       select count(*)::int as n from circle_members m
@@ -675,7 +675,7 @@ suite("POST /circles/:slug/join", () => {
     `;
     expect(rows[0]!.n, "a second request wrote a second row").toBe(1);
 
-    const { html } = await get("/circles/nightform", cookie);
+    const { html } = await get("/communities/nightform", cookie);
     expect(html).toContain("Your request is already with");
   });
 });

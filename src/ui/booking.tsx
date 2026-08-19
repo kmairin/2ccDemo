@@ -3,53 +3,53 @@
  *
  * `ActionArea` is the most important component in the product: eight rows in
  * the contract's state table, and the copy in each is fixed. Order inside it is
- * fixed too — circle kicker, the credit-and-places line, the button, one helper
- * line. The word "credit" never appears without a number beside it, and the
+ * fixed too — community kicker, the ticket-and-places line, the button, one helper
+ * line. The word "ticket" never appears without a number beside it, and the
  * button never just says "Book".
  *
- * One state has a second path through it. A member with no credits is offered
- * **one ticket for this gathering** first — the circle's 1-credit pass bought
- * and spent in a single submit — with the bigger passes underneath as the
- * cheaper-per-gathering option. Where the circle sells no 1-credit pass, that
- * row falls back to exactly the pass buttons it always had.
+ * One state has a second path through it. A member with no tickets is offered
+ * **one ticket for this event** first — the community's 1-ticket package bought
+ * and spent in a single submit — with the bigger packages underneath as the
+ * cheaper-per-event option. Where the community sells no 1-ticket package, that
+ * row falls back to exactly the package buttons it always had.
  */
 
 import type { Child } from "hono/jsx";
 import { Button } from "./components";
 
-/** A pass on offer. `href` points at the mock checkout, never straight at buy. */
-export type PassOffer = {
+/** A package on offer. `href` points at the mock checkout, never straight at buy. */
+export type PackageChoice = {
   id: string;
   /** Single, Trio or Season. */
   name: string;
-  credits: number;
+  tickets: number;
   /** "€180" — never "€180.00", never "from". */
   price: string;
-  /** The derivation: "3 gatherings · €60 each". */
+  /** The derivation: "3 events · €60 each". */
   derivation: string;
-  /** `/circles/:slug/passes/:packageId/checkout`. */
+  /** `/communities/:slug/packages/:packageId/checkout`. */
   href: string;
   /** Defaults to `Take {name}`. */
   cta?: string;
 };
 
-/* ---------- the three passes, as one bordered table (§5) ---------- */
+/* ---------- the three packages, as one bordered table (§5) ---------- */
 
 /**
  * One bordered table with hairline dividers — explicitly **not** three pricing
  * cards. Wrapped in its own scroll box so a narrow phone scrolls the table
  * rather than the page.
  */
-export function PassTable(props: { passes: PassOffer[]; caption?: string }) {
-  const { passes, caption } = props;
+export function PackageTable(props: { packages: PackageChoice[]; caption?: string }) {
+  const { packages, caption } = props;
   return (
     <div class="bordered scroll-x" tabindex={0}>
-      <table class="pass-table">
+      <table class="package-table">
         {caption !== undefined ? <caption class="vh">{caption}</caption> : null}
         <thead>
           <tr>
-            <th scope="col">Pass</th>
-            <th scope="col">Credits</th>
+            <th scope="col">Package</th>
+            <th scope="col">Tickets</th>
             <th scope="col">Price</th>
             <th scope="col">
               <span class="vh">Take it</span>
@@ -57,15 +57,15 @@ export function PassTable(props: { passes: PassOffer[]; caption?: string }) {
           </tr>
         </thead>
         <tbody>
-          {passes.map((p) => (
+          {packages.map((p) => (
             <tr>
-              <th scope="row" class="pass-name">
+              <th scope="row" class="package-name">
                 {p.name}
               </th>
-              <td class="num">{p.credits}</td>
+              <td class="num">{p.tickets}</td>
               <td>
-                <span class="pass-price">{p.price}</span>
-                <span class="pass-derivation">{p.derivation}</span>
+                <span class="package-price">{p.price}</span>
+                <span class="package-derivation">{p.derivation}</span>
               </td>
               <td>
                 <Button href={p.href} variant="ghost">
@@ -85,27 +85,27 @@ export function PassTable(props: { passes: PassOffer[]; caption?: string }) {
 export type ActionState =
   /** `/join?next=…`. */
   | { kind: "signed-out"; joinHref: string }
-  /** Not a member of a public circle: buying a pass joins it. */
-  | { kind: "join-public"; passes: PassOffer[] }
-  /** Not a member of a private circle: the wall is real. */
+  /** Not a member of a public community: buying a package joins it. */
+  | { kind: "join-public"; packages: PackageChoice[] }
+  /** Not a member of a private community: the wall is real. */
   | { kind: "join-private"; requestAction: string; next?: string }
   | { kind: "pending"; hostFirstName: string }
-  | { kind: "no-credits"; passes: PassOffer[] }
-  | { kind: "ready"; bookAction: string; creditsLeft: number; creditsTotal: number }
+  | { kind: "no-tickets"; packages: PackageChoice[] }
+  | { kind: "ready"; bookAction: string; ticketsLeft: number; ticketsTotal: number }
   | { kind: "booked"; code: string; ticketHref: string }
   | { kind: "full"; nextUp?: { title: string; when: string; href: string } };
 
 export type ActionAreaProps = {
-  circle: { slug: string; name: string };
+  community: { slug: string; name: string };
   placesLeft: number;
   capacity: number;
-  /** Always 1 today: booking spends one credit. */
-  creditCost?: number;
+  /** Always 1 today: booking spends one ticket. */
+  ticketCost?: number;
   state: ActionState;
   /**
-   * The gathering this area belongs to, for `POST /events/:slug/ticket`.
-   * Optional: when it is absent the slug is read back out of the pass links,
-   * which the gathering page builds as `…/checkout?next=/events/<slug>` (see
+   * The event this area belongs to, for `POST /events/:slug/ticket`.
+   * Optional: when it is absent the slug is read back out of the package links,
+   * which the event page builds as `…/checkout?next=/events/<slug>` (see
    * `eventSlugFrom`). Pass it explicitly and that fallback is never used.
    */
   eventSlug?: string;
@@ -116,14 +116,14 @@ export type ActionAreaProps = {
   ticketNonce?: string;
 };
 
-function PassButtons(props: { heading: string; passes: PassOffer[] }) {
+function PackageButtons(props: { heading: string; packages: PackageChoice[] }) {
   return (
     <>
       <p class="action-heading">{props.heading}</p>
-      <div class="action-passes">
-        {props.passes.map((p) => (
+      <div class="action-packages">
+        {props.packages.map((p) => (
           <Button href={p.href} variant="ghost" block={true}>
-            {p.name} · {p.price} · {p.credits} {p.credits === 1 ? "credit" : "credits"}
+            {p.name} · {p.price} · {p.tickets} {p.tickets === 1 ? "ticket" : "tickets"}
           </Button>
         ))}
       </div>
@@ -131,26 +131,26 @@ function PassButtons(props: { heading: string; passes: PassOffer[] }) {
   );
 }
 
-/* ---------- buying one ticket, without choosing a pass ---------- */
+/* ---------- buying one ticket, without choosing a package ---------- */
 
 /**
- * Which gathering these pass links were built for.
+ * Which event these package links were built for.
  *
- * The gathering page hands the action area a circle and a state and nothing
- * that names the gathering — but it builds every pass link with
+ * The event page hands the action area a community and a state and nothing
+ * that names the event — but it builds every package link with
  * `?next=/events/<slug>` so a member lands back where they were. That is where
  * the slug comes from when `eventSlug` is not supplied.
  *
  * Anything that is not a single `/events/<slug>` path returns null, and the
- * caller then simply does not offer a ticket. The circle page's pass table has
- * no `next` at all, so it can never accidentally be treated as a gathering.
+ * caller then simply does not offer a ticket. The community page's package table has
+ * no `next` at all, so it can never accidentally be treated as an event.
  */
-function eventSlugFrom(passes: PassOffer[], explicit?: string): string | null {
+function eventSlugFrom(packages: PackageChoice[], explicit?: string): string | null {
   if (explicit !== undefined && explicit !== "") return explicit;
-  for (const pass of passes) {
-    const query = pass.href.indexOf("?");
+  for (const choice of packages) {
+    const query = choice.href.indexOf("?");
     if (query === -1) continue;
-    const next = new URLSearchParams(pass.href.slice(query + 1)).get("next");
+    const next = new URLSearchParams(choice.href.slice(query + 1)).get("next");
     const match = next === null ? null : /^\/events\/([A-Za-z0-9-]+)$/.exec(next);
     if (match) return match[1]!;
   }
@@ -158,7 +158,7 @@ function eventSlugFrom(passes: PassOffer[], explicit?: string): string | null {
 }
 
 /**
- * "Buy a ticket — €135": the 1-credit pass and the booking in one submit
+ * "Buy a ticket — €135": the 1-ticket package and the booking in one submit
  * (`POST /events/:slug/ticket`).
  *
  * `crypto.randomUUID()` is exactly what `issuePurchaseNonce()` in `src/auth.ts`
@@ -179,26 +179,26 @@ function TicketButton(props: { action: string; price: string; nonce?: string }) 
 }
 
 export function ActionArea(props: ActionAreaProps) {
-  const { circle, placesLeft, capacity, creditCost = 1, state, eventSlug, ticketNonce } = props;
+  const { community, placesLeft, capacity, ticketCost = 1, state, eventSlug, ticketNonce } = props;
 
-  // A member with no credits is offered the single ticket first and the passes
-  // underneath as the cheaper-per-gathering option. Both halves have to be
-  // there: no 1-credit pass, or no gathering to attach it to, and this falls
-  // back to exactly the pass buttons that were here before.
-  const noCredits = state.kind === "no-credits" ? state.passes : [];
-  const single = noCredits.find((p) => p.credits === 1);
-  const ticketSlug = eventSlugFrom(noCredits, eventSlug);
+  // A member with no tickets is offered the single ticket first and the packages
+  // underneath as the cheaper-per-event option. Both halves have to be
+  // there: no 1-ticket package, or no event to attach it to, and this falls
+  // back to exactly the package buttons that were here before.
+  const noTickets = state.kind === "no-tickets" ? state.packages : [];
+  const single = noTickets.find((p) => p.tickets === 1);
+  const ticketSlug = eventSlugFrom(noTickets, eventSlug);
   const ticketAction =
     single !== undefined && ticketSlug !== null ? `/events/${ticketSlug}/ticket` : null;
 
   return (
     <div class="action">
       <p class="action-kicker">
-        <a href={`/circles/${circle.slug}`}>{circle.name}</a>
+        <a href={`/communities/${community.slug}`}>{community.name}</a>
       </p>
 
       <p class="action-line">
-        {creditCost} {creditCost === 1 ? "credit" : "credits"} · {placesLeft} of {capacity} places left
+        {ticketCost} {ticketCost === 1 ? "ticket" : "tickets"} · {placesLeft} of {capacity} places left
       </p>
 
       {state.kind === "signed-out" ? (
@@ -212,8 +212,8 @@ export function ActionArea(props: ActionAreaProps) {
 
       {state.kind === "join-public" ? (
         <>
-          <PassButtons heading="Reserve with a pass" passes={state.passes} />
-          <p class="action-help">Buying a pass joins the circle.</p>
+          <PackageButtons heading="Reserve with a package" packages={state.packages} />
+          <p class="action-help">Buying a package joins the community.</p>
         </>
       ) : null}
 
@@ -222,34 +222,34 @@ export function ActionArea(props: ActionAreaProps) {
           <form method="post" action={state.requestAction}>
             {state.next !== undefined ? <input type="hidden" name="next" value={state.next} /> : null}
             <Button type="submit" variant="primary" block={true}>
-              Request an invitation
+              Ask the host to join
             </Button>
           </form>
-          <p class="action-help">This circle approves members by hand.</p>
+          <p class="action-help">This community approves members by hand.</p>
         </>
       ) : null}
 
       {state.kind === "pending" ? (
         <p class="action-help">
-          Your request is with {state.hostFirstName}. Meanwhile: <a href="/events">other gatherings</a> or{" "}
+          Your request is with {state.hostFirstName}. Meanwhile: <a href="/events">other events</a> or{" "}
           <a href="/account">your account</a>.
         </p>
       ) : null}
 
-      {state.kind === "no-credits" ? (
+      {state.kind === "no-tickets" ? (
         ticketAction !== null && single !== undefined ? (
           <>
             <TicketButton action={ticketAction} price={single.price} nonce={ticketNonce} />
-            <p class="action-help">One place at this gathering. No card is charged.</p>
+            <p class="action-help">One place at this event. No card is charged.</p>
             <div style="margin-block-start:24px">
-              <PassButtons
+              <PackageButtons
                 heading="or save with 3 or 6"
-                passes={state.passes.filter((p) => p.credits > 1)}
+                packages={state.packages.filter((p) => p.tickets > 1)}
               />
             </div>
           </>
         ) : (
-          <PassButtons heading="You're in. You need a credit." passes={state.passes} />
+          <PackageButtons heading="You're in. You need a ticket." packages={state.packages} />
         )
       ) : null}
 
@@ -261,7 +261,7 @@ export function ActionArea(props: ActionAreaProps) {
             </Button>
           </form>
           <p class="action-help">
-            Uses 1 of your {state.creditsLeft} {state.creditsLeft === 1 ? "credit" : "credits"}.
+            Uses 1 of your {state.ticketsLeft} {state.ticketsLeft === 1 ? "ticket" : "tickets"}.
           </p>
         </>
       ) : null}
@@ -280,7 +280,7 @@ export function ActionArea(props: ActionAreaProps) {
           </Button>
           {state.nextUp !== undefined ? (
             <p class="action-help">
-              Next from this circle:{" "}
+              Next from this community:{" "}
               <a href={state.nextUp.href}>
                 {state.nextUp.title}, {state.nextUp.when} →
               </a>
@@ -296,16 +296,16 @@ export function ActionArea(props: ActionAreaProps) {
 
 export type ActionBarProps = {
   title: string;
-  /** "1 credit · 4 places left". */
+  /** "1 ticket · 4 places left". */
   note?: string;
   /** The button or the form that wraps it. */
   children?: Child;
 };
 
 /**
- * Opaque, never glass. Lives on `/circles/:slug` and `/events/:slug` only,
+ * Opaque, never glass. Lives on `/communities/:slug` and `/events/:slug` only,
  * never global, and is rendered **after `</main>`** so tab order matches
- * visual order — pass it to `Layout` as `actionBar`, which also sets
+ * visual order — package it to `Layout` as `actionBar`, which also sets
  * `class="has-actionbar"` on `<body>`. Hidden at ≥900px, where the same
  * actions live in a sticky sidebar card instead. Never both at once.
  */
@@ -328,9 +328,9 @@ function Seal() {
   return (
     <svg class="ticket-seal" viewBox="0 0 72 72" aria-hidden="true" focusable="false">
       <g fill="none" stroke="currentColor" stroke-width="1">
-        <circle cx="36" cy="36" r="34" />
-        <circle cx="36" cy="36" r="30.5" stroke-dasharray="1.4 6.6" />
-        <circle cx="36" cy="36" r="25" />
+        <community cx="36" cy="36" r="34" />
+        <community cx="36" cy="36" r="30.5" stroke-dasharray="1.4 6.6" />
+        <community cx="36" cy="36" r="25" />
       </g>
       <text
         x="36"
@@ -352,26 +352,26 @@ export type TicketPlateProps = {
   /** The booking code, shown large in Plex Mono at `--t-code`. */
   code: string;
   title: string;
-  circleName: string;
+  communityName: string;
   /** "Sat 23 Aug · 06:30–09:00". */
   when: string;
   venue: string;
   address: string;
-  /** Which pass this drew from: "Trio · 2 credits left". */
-  passName: string;
+  /** Which package this drew from: "Trio · 2 tickets left". */
+  packageName: string;
   bring?: string;
   /** "Free until Thu 21 Aug, 18:00". */
   cancelBy: string;
-  /** Drives the ticket's ground offset, same hash as the gathering's plate. */
+  /** Drives the ticket's ground offset, same hash as the event's plate. */
   seed: string;
 };
 
 export function TicketPlate(props: TicketPlateProps) {
-  const { code, title, circleName, when, venue, address, passName, bring, cancelBy } = props;
+  const { code, title, communityName, when, venue, address, packageName, bring, cancelBy } = props;
   return (
     <div class="ticket">
       <Seal />
-      <p class="micro micro--brass">{circleName}</p>
+      <p class="micro micro--brass">{communityName}</p>
       <p class="ticket-code">{code}</p>
       <h2 class="h-sec" style="margin-block-start:16px">
         {title}
@@ -391,7 +391,7 @@ export function TicketPlate(props: TicketPlateProps) {
         </div>
         <div>
           <dt class="micro">Drew from</dt>
-          <dd class="ticket-dd">{passName}</dd>
+          <dd class="ticket-dd">{packageName}</dd>
         </div>
         {bring !== undefined ? (
           <div>
@@ -411,14 +411,14 @@ export function TicketPlate(props: TicketPlateProps) {
 /* ---------- mock checkout (contract §E) ---------- */
 
 export type CheckoutSummaryProps = {
-  circleName: string;
-  passName: string;
-  credits: number;
+  communityName: string;
+  packageName: string;
+  tickets: number;
   /** "€480". */
   price: string;
-  /** "6 gatherings · €80 each". */
-  perGathering: string;
-  /** `/circles/:slug/passes/:packageId/buy`. */
+  /** "6 events · €80 each". */
+  perEvent: string;
+  /** `/communities/:slug/packages/:packageId/buy`. */
   action: string;
   /** Burned server-side on first POST; a replay 302s with "already processed". */
   nonce: string;
@@ -428,7 +428,7 @@ export type CheckoutSummaryProps = {
 };
 
 export function CheckoutSummary(props: CheckoutSummaryProps) {
-  const { circleName, passName, credits, price, perGathering, action, nonce, next, cardLast4 } = props;
+  const { communityName, packageName, tickets, price, perEvent, action, nonce, next, cardLast4 } = props;
   return (
     <form class="checkout" method="post" action={action}>
       <input type="hidden" name="nonce" value={nonce} />
@@ -436,24 +436,24 @@ export function CheckoutSummary(props: CheckoutSummaryProps) {
 
       <dl class="checkout-lines">
         <div class="checkout-line">
-          <dt>Circle</dt>
-          <dd>{circleName}</dd>
+          <dt>Community</dt>
+          <dd>{communityName}</dd>
         </div>
         <div class="checkout-line">
-          <dt>Pass</dt>
-          <dd>{passName}</dd>
+          <dt>Package</dt>
+          <dd>{packageName}</dd>
         </div>
         <div class="checkout-line">
-          <dt>Credits</dt>
-          <dd class="num">{credits}</dd>
+          <dt>Tickets</dt>
+          <dd class="num">{tickets}</dd>
         </div>
         <div class="checkout-line">
           <dt>Price</dt>
-          <dd class="pass-price">{price}</dd>
+          <dd class="package-price">{price}</dd>
         </div>
         <div class="checkout-line">
           <dt>Works out at</dt>
-          <dd class="meta">{perGathering}</dd>
+          <dd class="meta">{perEvent}</dd>
         </div>
       </dl>
 
@@ -472,13 +472,13 @@ export function CheckoutSummary(props: CheckoutSummaryProps) {
   );
 }
 
-/* ---------- credits (§5 account) ---------- */
+/* ---------- tickets (§5 account) ---------- */
 
 /**
  * N hairline squares, filled = spent. Not a progress bar — the count is
  * readable at a glance because you can count the squares.
  */
-export function CreditSquares(props: { total: number; used: number; label?: string }) {
+export function TicketSquares(props: { total: number; used: number; label?: string }) {
   const total = Math.max(0, Math.trunc(props.total));
   const used = Math.min(total, Math.max(0, Math.trunc(props.used)));
   const left = total - used;
@@ -487,9 +487,9 @@ export function CreditSquares(props: { total: number; used: number; label?: stri
 
   return (
     <div>
-      <div class="credits" role="img" aria-label={props.label ?? `${left} of ${total} credits left`}>
+      <div class="tickets" role="img" aria-label={props.label ?? `${left} of ${total} tickets left`}>
         {squares.map((i) => (
-          <span class={i < used ? "credit-sq is-spent" : "credit-sq"} />
+          <span class={i < used ? "ticket-sq is-spent" : "ticket-sq"} />
         ))}
       </div>
       <p class="meta num" style="margin-block-start:12px">

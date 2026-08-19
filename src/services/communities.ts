@@ -1,12 +1,12 @@
 /**
- * Reading circles: the directory, one circle, and its plate gallery.
+ * Reading communities: the directory, one community, and its plate gallery.
  *
  * Every function takes `env` and returns typed rows. No Hono, no Response, no
  * formatting — routes shape the answer, these just fetch it.
  */
 import { and, asc, count, eq, gte, ilike, or, sql, type SQL } from "drizzle-orm";
 import { getDb, type DatabaseEnv } from "../db";
-import { circles, events, photos, users, type CircleCategory } from "../schema";
+import { communities, events, photos, users, type CommunityCategory } from "../schema";
 import {
   approvedMemberCount,
   boundLimit,
@@ -17,30 +17,30 @@ import {
   publishedEventCount,
 } from "./common";
 
-/** A circle as the directory shows it. Matches the contract's list item. */
-export interface CircleSummary {
+/** A community as the directory shows it. Matches the contract's list item. */
+export interface CommunitySummary {
   id: string;
   slug: string;
   name: string;
   tagline: string;
   city: string;
   country: string;
-  category: CircleCategory;
+  category: CommunityCategory;
   isPrivate: boolean;
   coverKey: string | null;
   /** Approved members, the host included. Same number everywhere it appears. */
   memberCount: number;
-  /** Published gatherings. Drafts are invisible to members. */
+  /** Published events. Drafts are invisible to members. */
   eventCount: number;
 }
 
-/** The circle page needs the story too. */
-export interface CircleDetail extends CircleSummary {
+/** The community page needs the story too. */
+export interface CommunityDetail extends CommunitySummary {
   description: string;
 }
 
 /** Who runs it. `id` is for the "must host it" check; the JSON prints the rest. */
-export interface CircleHost {
+export interface CommunityHost {
   id: string;
   name: string;
   headline: string | null;
@@ -66,21 +66,21 @@ export interface PhotoPlate {
  * module scope (AGENTS.md §5: the client is built inside a handler).
  */
 const summaryColumns = {
-  id: circles.id,
-  slug: circles.slug,
-  name: circles.name,
-  tagline: circles.tagline,
-  city: circles.city,
-  country: circles.country,
-  category: circles.category,
-  isPrivate: circles.isPrivate,
-  coverKey: circles.coverKey,
-  memberCount: approvedMemberCount(circles.id),
-  eventCount: publishedEventCount(circles.id),
+  id: communities.id,
+  slug: communities.slug,
+  name: communities.name,
+  tagline: communities.tagline,
+  city: communities.city,
+  country: communities.country,
+  category: communities.category,
+  isPrivate: communities.isPrivate,
+  coverKey: communities.coverKey,
+  memberCount: approvedMemberCount(communities.id),
+  eventCount: publishedEventCount(communities.id),
 };
 
 /**
- * The directory, oldest circle first so the order is stable between renders.
+ * The directory, oldest community first so the order is stable between renders.
  *
  * `category` is already validated by the caller — it is a column filter, not a
  * search. `city` and `country` cannot be, because they come from the data
@@ -88,21 +88,21 @@ const summaryColumns = {
  * is added there), so they are matched case-insensitively and an unknown one
  * is an empty list rather than an error. The three compose.
  */
-export async function listCircles(
+export async function listCommunities(
   env: DatabaseEnv,
   options: {
-    category?: CircleCategory;
+    category?: CommunityCategory;
     city?: string;
     country?: string;
     limit?: number;
   } = {},
-): Promise<CircleSummary[]> {
+): Promise<CommunitySummary[]> {
   const db = getDb(env);
   const rows = await db
     .select(summaryColumns)
-    .from(circles)
-    .where(and(...circleFilters(options)))
-    .orderBy(asc(circles.createdAt))
+    .from(communities)
+    .where(and(...communityFilters(options)))
+    .orderBy(asc(communities.createdAt))
     .limit(boundLimit(options.limit));
   return rows.map(toSummary);
 }
@@ -113,15 +113,15 @@ export async function listCircles(
  * wildcard-free pattern is case-insensitive equality, and Drizzle parameterises
  * the pattern (AGENTS.md §5) — nothing here is concatenated into SQL.
  */
-function circleFilters(options: {
-  category?: CircleCategory;
+function communityFilters(options: {
+  category?: CommunityCategory;
   city?: string;
   country?: string;
 }): SQL[] {
   const filters: SQL[] = [];
-  if (options.category) filters.push(eq(circles.category, options.category));
-  if (options.city) filters.push(ilike(circles.city, likeExact(options.city)));
-  if (options.country) filters.push(ilike(circles.country, likeExact(options.country)));
+  if (options.category) filters.push(eq(communities.category, options.category));
+  if (options.city) filters.push(ilike(communities.city, likeExact(options.city)));
+  if (options.country) filters.push(ilike(communities.country, likeExact(options.country)));
   return filters;
 }
 
@@ -134,28 +134,28 @@ function circleFilters(options: {
  * concatenation anywhere in this query, which is the rule that keeps injection
  * out (AGENTS.md §5).
  */
-export async function searchCircles(
+export async function searchCommunities(
   env: DatabaseEnv,
   term: string,
   options: { limit?: number } = {},
-): Promise<CircleSummary[]> {
+): Promise<CommunitySummary[]> {
   const trimmed = term.trim();
   if (trimmed === "") return [];
   const pattern = likeContains(trimmed);
   const db = getDb(env);
   const rows = await db
     .select(summaryColumns)
-    .from(circles)
+    .from(communities)
     .where(
       or(
-        ilike(circles.name, pattern),
-        ilike(circles.tagline, pattern),
-        ilike(circles.description, pattern),
-        ilike(circles.city, pattern),
-        ilike(circles.country, pattern),
+        ilike(communities.name, pattern),
+        ilike(communities.tagline, pattern),
+        ilike(communities.description, pattern),
+        ilike(communities.city, pattern),
+        ilike(communities.country, pattern),
       ),
     )
-    .orderBy(asc(circles.createdAt))
+    .orderBy(asc(communities.createdAt))
     .limit(boundLimit(options.limit));
   return rows.map(toSummary);
 }
@@ -175,7 +175,7 @@ export async function searchCircles(
 export interface CitySummary {
   city: string;
   country: string;
-  circleCount: number;
+  communityCount: number;
   eventCount: number;
 }
 
@@ -183,7 +183,7 @@ export interface CitySummary {
 export interface CountrySummary {
   country: string;
   cityCount: number;
-  circleCount: number;
+  communityCount: number;
   eventCount: number;
 }
 
@@ -191,7 +191,7 @@ export interface CountrySummary {
 const groupCount = count().mapWith(Number);
 
 /**
- * Every city that has a community based in it or a gathering coming up in it.
+ * Every city that has a community based in it or an event coming up in it.
  *
  * `match` narrows to cities whose name contains it — that is how the search
  * page finds "Bang" — and `country` narrows to one country's cities, which is
@@ -205,34 +205,34 @@ export async function listCities(
   const from = options.now ?? new Date();
   const cap = boundLimit(options.limit);
 
-  const circleWhere: SQL[] = [];
+  const communityWhere: SQL[] = [];
   const eventWhere: SQL[] = [eq(events.status, "published"), gte(events.startsAt, from)];
   if (options.country) {
-    circleWhere.push(ilike(circles.country, likeExact(options.country)));
-    eventWhere.push(ilike(circles.country, likeExact(options.country)));
+    communityWhere.push(ilike(communities.country, likeExact(options.country)));
+    eventWhere.push(ilike(communities.country, likeExact(options.country)));
   }
   if (options.match) {
-    circleWhere.push(ilike(circles.city, likeContains(options.match)));
+    communityWhere.push(ilike(communities.city, likeContains(options.match)));
     eventWhere.push(ilike(events.city, likeContains(options.match)));
   }
 
-  const [circleRows, eventRows] = await Promise.all([
+  const [communityRows, eventRows] = await Promise.all([
     db
-      .select({ city: circles.city, country: circles.country, n: groupCount })
-      .from(circles)
-      .where(and(...circleWhere))
-      .groupBy(circles.city, circles.country)
-      .orderBy(asc(circles.country), asc(circles.city))
+      .select({ city: communities.city, country: communities.country, n: groupCount })
+      .from(communities)
+      .where(and(...communityWhere))
+      .groupBy(communities.city, communities.country)
+      .orderBy(asc(communities.country), asc(communities.city))
       .limit(cap),
-    // A gathering is in the city its own column names; its country comes from
-    // the circle that runs it, because `events` has none of its own.
+    // An event is in the city its own column names; its country comes from
+    // the community that runs it, because `events` has none of its own.
     db
-      .select({ city: events.city, country: circles.country, n: groupCount })
+      .select({ city: events.city, country: communities.country, n: groupCount })
       .from(events)
-      .innerJoin(circles, eq(circles.id, events.circleId))
+      .innerJoin(communities, eq(communities.id, events.communityId))
       .where(and(...eventWhere))
-      .groupBy(events.city, circles.country)
-      .orderBy(asc(circles.country), asc(events.city))
+      .groupBy(events.city, communities.country)
+      .orderBy(asc(communities.country), asc(events.city))
       .limit(cap),
   ]);
 
@@ -241,12 +241,12 @@ export async function listCities(
     const key = placeKey(country, city);
     let row = byCity.get(key);
     if (row === undefined) {
-      row = { city, country, circleCount: 0, eventCount: 0 };
+      row = { city, country, communityCount: 0, eventCount: 0 };
       byCity.set(key, row);
     }
     return row;
   };
-  for (const row of circleRows) put(row.city, row.country).circleCount = Number(row.n);
+  for (const row of communityRows) put(row.city, row.country).communityCount = Number(row.n);
   for (const row of eventRows) put(row.city, row.country).eventCount = Number(row.n);
 
   return [...byCity.values()].sort(byName((row) => `${row.country}|${row.city}`));
@@ -254,10 +254,10 @@ export async function listCities(
 
 /**
  * Every country that has something, with its city, community and upcoming
- * gathering counts — the index `/countries` draws.
+ * event counts — the index `/countries` draws.
  *
- * A country exists here because a community is based in it: a gathering
- * belongs to a circle, and the circle is what carries the country, so the two
+ * A country exists here because a community is based in it: an event
+ * belongs to a community, and the community is what carries the country, so the two
  * sets cannot disagree.
  */
 export async function listCountries(
@@ -267,23 +267,23 @@ export async function listCountries(
   const db = getDb(env);
   const from = options.now ?? new Date();
   const cap = boundLimit(options.limit);
-  const match = options.match ? ilike(circles.country, likeContains(options.match)) : undefined;
+  const match = options.match ? ilike(communities.country, likeContains(options.match)) : undefined;
 
-  const [circleRows, eventRows, cityRows] = await Promise.all([
+  const [communityRows, eventRows, cityRows] = await Promise.all([
     db
-      .select({ country: circles.country, n: groupCount })
-      .from(circles)
+      .select({ country: communities.country, n: groupCount })
+      .from(communities)
       .where(match)
-      .groupBy(circles.country)
-      .orderBy(asc(circles.country))
+      .groupBy(communities.country)
+      .orderBy(asc(communities.country))
       .limit(cap),
     db
-      .select({ country: circles.country, n: groupCount })
+      .select({ country: communities.country, n: groupCount })
       .from(events)
-      .innerJoin(circles, eq(circles.id, events.circleId))
+      .innerJoin(communities, eq(communities.id, events.communityId))
       .where(and(eq(events.status, "published"), gte(events.startsAt, from), match))
-      .groupBy(circles.country)
-      .orderBy(asc(circles.country))
+      .groupBy(communities.country)
+      .orderBy(asc(communities.country))
       .limit(cap),
     // Cities per country, counted the same way `listCities` builds them, so
     // the number on the index equals the rows the country page prints.
@@ -295,12 +295,12 @@ export async function listCountries(
     const key = country.trim().toLowerCase();
     let row = byCountry.get(key);
     if (row === undefined) {
-      row = { country, cityCount: 0, circleCount: 0, eventCount: 0 };
+      row = { country, cityCount: 0, communityCount: 0, eventCount: 0 };
       byCountry.set(key, row);
     }
     return row;
   };
-  for (const row of circleRows) put(row.country).circleCount = Number(row.n);
+  for (const row of communityRows) put(row.country).communityCount = Number(row.n);
   for (const row of eventRows) put(row.country).eventCount = Number(row.n);
   for (const city of cityRows) {
     const key = city.country.trim().toLowerCase();
@@ -344,29 +344,29 @@ export async function getCity(
   return rows.find((row) => row.city.trim().toLowerCase() === wanted) ?? null;
 }
 
-/** One circle by its URL segment, with the member who runs it. */
-export async function getCircleBySlug(
+/** One community by its URL segment, with the member who runs it. */
+export async function getCommunityBySlug(
   env: DatabaseEnv,
   slug: string,
-): Promise<{ circle: CircleDetail; host: CircleHost } | null> {
+): Promise<{ community: CommunityDetail; host: CommunityHost } | null> {
   const db = getDb(env);
   const [row] = await db
     .select({
       ...summaryColumns,
-      description: circles.description,
+      description: communities.description,
       hostId: users.id,
       hostName: users.name,
       hostHeadline: users.headline,
       hostCity: users.city,
     })
-    .from(circles)
-    .innerJoin(users, eq(users.id, circles.hostUserId))
-    .where(eq(circles.slug, slug))
+    .from(communities)
+    .innerJoin(users, eq(users.id, communities.hostUserId))
+    .where(eq(communities.slug, slug))
     .limit(1);
   if (!row) return null;
 
   return {
-    circle: { ...toSummary(row), description: row.description },
+    community: { ...toSummary(row), description: row.description },
     host: {
       id: row.hostId,
       name: row.hostName,
@@ -377,38 +377,38 @@ export async function getCircleBySlug(
 }
 
 /**
- * The gallery for a circle. 4–8 plates in practice; the cap is here because
+ * The gallery for a community. 4–8 plates in practice; the cap is here because
  * nothing stops a host adding more.
  */
-export async function listCirclePhotos(
+export async function listCommunityPhotos(
   env: DatabaseEnv,
-  circleId: string,
+  communityId: string,
   options: { limit?: number } = {},
 ): Promise<PhotoPlate[]> {
   const db = getDb(env);
   return db
     .select({ caption: photos.caption, seed: photos.seed, objectKey: photos.objectKey })
     .from(photos)
-    .where(eq(photos.circleId, circleId))
+    .where(eq(photos.communityId, communityId))
     .orderBy(asc(photos.sortOrder), asc(photos.createdAt))
     .limit(boundLimit(options.limit));
 }
 
 /**
- * Does this member run this circle? One indexed lookup — the host console asks
+ * Does this member run this community? One indexed lookup — the host console asks
  * it on every request, and a wrong answer here is a 403 that should have been
  * a page.
  */
-export async function isCircleHost(
+export async function isCommunityHost(
   env: DatabaseEnv,
-  circleId: string,
+  communityId: string,
   userId: string,
 ): Promise<boolean> {
   const db = getDb(env);
   const [row] = await db
     .select({ one: sql<number>`1`.mapWith(Number) })
-    .from(circles)
-    .where(and(eq(circles.id, circleId), eq(circles.hostUserId, userId)))
+    .from(communities)
+    .where(and(eq(communities.id, communityId), eq(communities.hostUserId, userId)))
     .limit(1);
   return row !== undefined;
 }
@@ -421,12 +421,12 @@ function toSummary(row: {
   tagline: string;
   city: string;
   country: string;
-  category: CircleCategory;
+  category: CommunityCategory;
   isPrivate: boolean;
   coverKey: string | null;
   memberCount: number;
   eventCount: number;
-}): CircleSummary {
+}): CommunitySummary {
   return {
     id: row.id,
     slug: row.slug,

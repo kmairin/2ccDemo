@@ -9,8 +9,8 @@
  *
  * They need Postgres running and `npm run seed` applied. Every member these
  * tests create is prefixed `profiletest-`, and `afterAll` unwinds their
- * bookings, passes, orders and memberships by hand before deleting them — the
- * FKs from `passes` to `orders` and from `bookings` to `passes` carry no
+ * bookings, packages, orders and memberships by hand before deleting them — the
+ * FKs from `packages` to `orders` and from `bookings` to `packages` carry no
  * ON DELETE, so a cascade from `users` leaves orphans behind (the same reason
  * `test/flows.test.ts` unwinds by hand). The seed is left as it was found.
  */
@@ -18,7 +18,7 @@ import { jsx } from "hono/jsx";
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 import app from "../src/index";
-import { ActionArea, type PassOffer } from "../src/ui/booking";
+import { ActionArea, type PackageChoice } from "../src/ui/booking";
 import { AttendeeList, MemberList, type PersonEntry } from "../src/ui/people";
 import { hasDatabase } from "./support/database";
 
@@ -48,8 +48,8 @@ afterAll(async () => {
   // deletes anyway fails the whole file before a single test is skipped.
   if (!hasDatabase) return;
   if (hasDatabase && created.length > 0) {
-    // Dependency order, by hand: the FKs from `passes` to `orders` and from
-    // `bookings` to `passes` have no ON DELETE, so a cascade from `users` is
+    // Dependency order, by hand: the FKs from `packages` to `orders` and from
+    // `bookings` to `packages` have no ON DELETE, so a cascade from `users` is
     // not safe here. Same reason `test/flows.test.ts` unwinds by hand.
     await sql`delete from bookings where user_id = any(${created})`;
     await sql`delete from passes where user_id = any(${created})`;
@@ -132,7 +132,7 @@ suite("GET /members/:id", () => {
     expect(html).not.toContain(member.email);
   });
 
-  it("lists the circles they are approved in, and never a pending request", async () => {
+  it("lists the communities they are approved in, and never a pending request", async () => {
     const [seeded] = await sql<{ id: string }[]>`
       select id from users where email = 'member@2cc.club' limit 1`;
     const rows = await sql<{ slug: string; status: string }[]>`
@@ -144,11 +144,11 @@ suite("GET /members/:id", () => {
     expect(approved.length, "seed has no approved membership to check").toBeGreaterThan(0);
 
     const { html } = await get(`/members/${seeded!.id}`);
-    for (const row of approved) expect(html).toContain(`/circles/${row.slug}`);
-    for (const row of pending) expect(html).not.toContain(`/circles/${row.slug}`);
+    for (const row of approved) expect(html).toContain(`/communities/${row.slug}`);
+    for (const row of pending) expect(html).not.toContain(`/communities/${row.slug}`);
   });
 
-  it("lists the gatherings they hold a confirmed place at", async () => {
+  it("lists the events they hold a confirmed place at", async () => {
     const [seeded] = await sql<{ id: string }[]>`
       select id from users where email = 'member@2cc.club' limit 1`;
     const booked = await sql<{ slug: string }[]>`
@@ -362,54 +362,54 @@ describe("the member and attendee lists", () => {
 
 /* ---------------------------------------------- the single ticket, in the UI */
 
-describe("the gathering action area, for a member with no credits", () => {
-  const offers = (slug: string): PassOffer[] => {
+describe("the event action area, for a member with no tickets", () => {
+  const offers = (slug: string): PackageChoice[] => {
     const next = `?next=${encodeURIComponent(`/events/${slug}`)}`;
     return [
       {
         id: "single",
         name: "Single",
-        credits: 1,
+        tickets: 1,
         price: "€135",
-        derivation: "1 gathering",
-        href: `/circles/cap-ferrat/passes/single/checkout${next}`,
+        derivation: "1 event",
+        href: `/communities/cap-ferrat/packages/single/checkout${next}`,
       },
       {
         id: "trio",
         name: "Trio",
-        credits: 3,
+        tickets: 3,
         price: "€360",
-        derivation: "3 gatherings · €120 each",
-        href: `/circles/cap-ferrat/passes/trio/checkout${next}`,
+        derivation: "3 events · €120 each",
+        href: `/communities/cap-ferrat/packages/trio/checkout${next}`,
       },
       {
         id: "season",
         name: "Season",
-        credits: 6,
+        tickets: 6,
         price: "€660",
-        derivation: "6 gatherings · €110 each",
-        href: `/circles/cap-ferrat/passes/season/checkout${next}`,
+        derivation: "6 events · €110 each",
+        href: `/communities/cap-ferrat/packages/season/checkout${next}`,
       },
     ];
   };
 
-  const area = (passes: PassOffer[]) =>
+  const area = (packages: PackageChoice[]) =>
     render(
       jsx(ActionArea, {
-        circle: { slug: "cap-ferrat", name: "Cap Ferrat Sailing Society" },
+        community: { slug: "cap-ferrat", name: "Cap Ferrat Sailing Society" },
         placesLeft: 4,
         capacity: 12,
-        state: { kind: "no-credits", passes },
+        state: { kind: "no-tickets", packages },
       }),
     );
 
-  it("offers the single ticket first, and the bigger passes underneath", () => {
+  it("offers the single ticket first, and the bigger packages underneath", () => {
     const html = area(offers("shakedown-sail"));
     expect(html).toContain("Buy a ticket — €135");
     expect(html).toContain('action="/events/shakedown-sail/ticket"');
     expect(html).toContain('name="nonce"');
     expect(html).toContain("or save with 3 or 6");
-    // The 1-credit pass is not repeated as a pass button beneath its own ticket.
+    // The 1-ticket package is not repeated as a package button beneath its own ticket.
     expect(html).not.toContain("Single · €135");
   });
 
@@ -420,31 +420,31 @@ describe("the gathering action area, for a member with no credits", () => {
     expect(one?.[1]).not.toBe(two?.[1]);
   });
 
-  it("falls back to the pass buttons when the circle sells no 1-credit pass", () => {
-    const html = area(offers("shakedown-sail").filter((p) => p.credits > 1));
+  it("falls back to the package buttons when the community sells no 1-ticket package", () => {
+    const html = area(offers("shakedown-sail").filter((p) => p.tickets > 1));
     expect(html).not.toContain("Buy a ticket");
-    expect(html).toContain("You need a credit.");
-    expect(html).toContain("Trio · €360 · 3 credits");
+    expect(html).toContain("You need a ticket.");
+    expect(html).toContain("Trio · €360 · 3 tickets");
   });
 
-  it("offers nothing to buy in one step when the links do not name a gathering", () => {
+  it("offers nothing to buy in one step when the links do not name an event", () => {
     const noNext = offers("shakedown-sail").map((p) => ({ ...p, href: p.href.split("?")[0]! }));
     const html = area(noNext);
     expect(html).not.toContain("Buy a ticket");
-    expect(html).toContain("You need a credit.");
+    expect(html).toContain("You need a ticket.");
   });
 });
 
 /* ------------------------------------------- the single ticket, end to end */
 
-/** A public circle that sells a 1-credit pass and has a gathering with room. */
+/** A public community that sells a 1-ticket package and has an event with room. */
 async function bookableTarget(): Promise<{
-  circleSlug: string;
+  communitySlug: string;
   eventSlug: string;
   priceCents: number;
 }> {
-  const [row] = await sql<{ circleSlug: string; eventSlug: string; priceCents: number }[]>`
-    select c.slug as "circleSlug", e.slug as "eventSlug", p.price_cents as "priceCents"
+  const [row] = await sql<{ communitySlug: string; eventSlug: string; priceCents: number }[]>`
+    select c.slug as "communitySlug", e.slug as "eventSlug", p.price_cents as "priceCents"
       from events e
       join circles c on c.id = e.circle_id
       join packages p on p.circle_id = c.id and p.credits = 1 and p.active
@@ -454,7 +454,7 @@ async function bookableTarget(): Promise<{
                           where b.event_id = e.id and b.status = 'confirmed')
      order by e.starts_at
      limit 1`;
-  expect(row, "seed has no open gathering on a public circle").toBeTruthy();
+  expect(row, "seed has no open event on a public community").toBeTruthy();
   return { ...row!, priceCents: Number(row!.priceCents) };
 }
 
@@ -470,18 +470,18 @@ suite("POST /events/:slug/ticket", () => {
     expect(res.headers.get("location")).toContain("/join?next=");
   });
 
-  it("404s a gathering nobody has heard of", async () => {
+  it("404s an event nobody has heard of", async () => {
     const me = await signUp("Ticket Ghost");
-    const res = await post("/events/not-a-real-gathering/ticket", {}, me.cookie);
+    const res = await post("/events/not-a-real-event/ticket", {}, me.cookie);
     expect(res.status).toBe(404);
   });
 
-  it("buys the 1-credit pass and books, in one submit", async () => {
-    const { circleSlug, eventSlug, priceCents } = await bookableTarget();
+  it("buys the 1-ticket package and books, in one submit", async () => {
+    const { communitySlug, eventSlug, priceCents } = await bookableTarget();
     const me = await signUp("Ticket Buyer");
 
-    // A member of the circle, holding nothing.
-    expect((await post(`/circles/${circleSlug}/join`, {}, me.cookie)).status).toBe(302);
+    // A member of the community, holding nothing.
+    expect((await post(`/communities/${communitySlug}/join`, {}, me.cookie)).status).toBe(302);
 
     const before = await ticketCounts(me.id, eventSlug);
     expect(before.orders).toBe(0);
@@ -496,15 +496,15 @@ suite("POST /events/:slug/ticket", () => {
     expect(after.bookings).toBe(1);
     expect(after.attendees).toBe(before.attendees + 1);
     expect(after.paidCents).toBe(priceCents);
-    // One credit bought, one credit spent — the pass is empty, not unspent.
-    expect(after.creditsTotal).toBe(1);
-    expect(after.creditsUsed).toBe(1);
+    // One ticket bought, one ticket spent — the package is empty, not unspent.
+    expect(after.ticketsTotal).toBe(1);
+    expect(after.ticketsUsed).toBe(1);
   });
 
   it("creates no second order when the same form is submitted twice", async () => {
-    const { circleSlug, eventSlug } = await bookableTarget();
+    const { communitySlug, eventSlug } = await bookableTarget();
     const me = await signUp("Ticket Double Tap");
-    await post(`/circles/${circleSlug}/join`, {}, me.cookie);
+    await post(`/communities/${communitySlug}/join`, {}, me.cookie);
 
     const nonce = `profiletest-replay-${RUN}`;
     const first = await post(`/events/${eventSlug}/ticket`, { nonce }, me.cookie);
@@ -521,7 +521,7 @@ suite("POST /events/:slug/ticket", () => {
     expect(twice.paidCents).toBe(once.paidCents);
   });
 
-  it("refuses on a private circle the member has not been approved for", async () => {
+  it("refuses on a private community the member has not been approved for", async () => {
     const [row] = await sql<{ eventSlug: string }[]>`
       select e.slug as "eventSlug" from events e
         join circles c on c.id = e.circle_id
@@ -549,8 +549,8 @@ async function ticketCounts(
   bookings: number;
   attendees: number;
   paidCents: number;
-  creditsTotal: number;
-  creditsUsed: number;
+  ticketsTotal: number;
+  ticketsUsed: number;
 }> {
   const [row] = await sql<
     {
@@ -580,7 +580,7 @@ async function ticketCounts(
     bookings: Number(row!.bookings),
     attendees: Number(row!.attendees),
     paidCents: Number(row!.paid),
-    creditsTotal: Number(row!.total),
-    creditsUsed: Number(row!.used),
+    ticketsTotal: Number(row!.total),
+    ticketsUsed: Number(row!.used),
   };
 }

@@ -231,7 +231,7 @@ export async function takeFlash(
 /**
  * A flash carries a tone as well as a message.
  *
- * Without one, a refusal ("you need a credit for this circle") renders in the
+ * Without one, a refusal ("you need a ticket for this community") renders in the
  * same neutral band as a confirmation ("your place is booked") — an error that
  * does not look like an error. The tone is encoded as a `warn:` / `confirm:`
  * prefix on the stored string rather than a second column, so no migration is

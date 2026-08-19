@@ -110,7 +110,7 @@ export function formatTime(d: Date, timeZone = "UTC"): string {
 }
 
 /**
- * When a gathering runs.
+ * When an event runs.
  *
  *   same day   `Fri 12 Sep · 18:30–22:00`
  *   over midnight  `Fri 12 Sep 22:00 – Sat 13 Sep 03:00`

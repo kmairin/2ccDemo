@@ -13,15 +13,15 @@
  */
 import { Hono, type Context } from "hono";
 import { requireApiUser, type AuthEnv } from "../auth";
-import { CIRCLE_CATEGORIES, type CircleCategory } from "../schema";
+import { COMMUNITY_CATEGORIES, type CommunityCategory } from "../schema";
 import {
-  getCircleBySlug,
-  listCirclePhotos,
-  listCircles,
+  getCommunityBySlug,
+  listCommunityPhotos,
+  listCommunities,
   listCities,
   listCountries,
-  searchCircles,
-} from "../services/circles";
+  searchCommunities,
+} from "../services/communities";
 import { DEFAULT_LIMIT, MAX_LIMIT, SEARCH_MAX_LENGTH } from "../services/common";
 import {
   currentMonthKey,
@@ -29,16 +29,16 @@ import {
   listCalendarMonth,
   listEventPhotos,
   listEvents,
-  listEventsForCircle,
+  listEventsForCommunity,
   parseMonth,
   searchEvents,
 } from "../services/events";
 import { listEventAttendees, listApprovedMembers, listMembershipsForUser } from "../services/members";
 import {
   listBookingsForUser,
-  listHostedCircles,
+  listHostedCommunities,
   listPackages,
-  listPassesForUser,
+  listPackagesForUser,
 } from "../services/commerce";
 
 const api = new Hono<{ Bindings: AuthEnv }>();
@@ -64,13 +64,13 @@ function readLimit(c: ApiContext): number | Response {
 }
 
 /** `?category=` — one of the five, or a 400 that names them. */
-function readCategory(c: ApiContext): CircleCategory | undefined | Response {
+function readCategory(c: ApiContext): CommunityCategory | undefined | Response {
   const raw = c.req.query("category");
   if (raw === undefined || raw === "") return undefined;
-  if (!(CIRCLE_CATEGORIES as readonly string[]).includes(raw)) {
-    return c.json({ error: `category must be one of: ${CIRCLE_CATEGORIES.join(", ")}` }, 400);
+  if (!(COMMUNITY_CATEGORIES as readonly string[]).includes(raw)) {
+    return c.json({ error: `category must be one of: ${COMMUNITY_CATEGORIES.join(", ")}` }, 400);
   }
-  return raw as CircleCategory;
+  return raw as CommunityCategory;
 }
 
 /**
@@ -127,17 +127,17 @@ api.get("/health", async (c) => {
         sql`select "column_name" from "information_schema"."columns"
             where "table_name" = 'circles' order by "column_name"`,
       );
-      out.circleColumns = (cols as unknown as unknown[]).map((r) =>
+      out.communityColumns = (cols as unknown as unknown[]).map((r) =>
         Array.isArray(r) ? r[0] : Object.values(r as object)[0],
       );
     } catch (err) {
-      out.circleColumnsError = err instanceof Error ? err.message : String(err);
+      out.communityColumnsError = err instanceof Error ? err.message : String(err);
     }
     try {
-      const { listCircles } = await import("../services/circles");
-      out.listCircles = (await listCircles(c.env, { limit: 2 })).length;
+      const { listCommunities } = await import("../services/communities");
+      out.listCommunities = (await listCommunities(c.env, { limit: 2 })).length;
     } catch (err) {
-      out.listCirclesError = (err instanceof Error ? err.message : String(err)).slice(0, 400);
+      out.listCommunitiesError = (err instanceof Error ? err.message : String(err)).slice(0, 400);
     }
     return c.json({ status: "ok", probe: out });
   }
@@ -145,35 +145,35 @@ api.get("/health", async (c) => {
 });
 
 /** The directory. `?category=`, `?city=` and `?country=` filter and compose; `?limit=` bounds. */
-api.get("/circles", async (c) => {
+api.get("/communities", async (c) => {
   const limit = readLimit(c);
   if (limit instanceof Response) return limit;
   const category = readCategory(c);
   if (category instanceof Response) return category;
   const place = readPlace(c);
 
-  const circles = await listCircles(c.env, { category, ...place, limit });
-  return c.json({ circles });
+  const communities = await listCommunities(c.env, { category, ...place, limit });
+  return c.json({ communities });
 });
 
-/** One circle: the story, who runs it, what it sells, what is on, who is in, its plates. */
-api.get("/circles/:slug", async (c) => {
+/** One community: the story, who runs it, what it sells, what is on, who is in, its plates. */
+api.get("/communities/:slug", async (c) => {
   const limit = readLimit(c);
   if (limit instanceof Response) return limit;
 
-  const found = await getCircleBySlug(c.env, c.req.param("slug"));
-  if (!found) return c.json({ error: "Circle not found" }, 404);
-  const { circle, host } = found;
+  const found = await getCommunityBySlug(c.env, c.req.param("slug"));
+  if (!found) return c.json({ error: "Community not found" }, 404);
+  const { community, host } = found;
 
   const [packages, events, members, photos] = await Promise.all([
-    listPackages(c.env, circle.id),
-    listEventsForCircle(c.env, circle.id, { limit }),
-    listApprovedMembers(c.env, circle.id, { limit }),
-    listCirclePhotos(c.env, circle.id, { limit }),
+    listPackages(c.env, community.id),
+    listEventsForCommunity(c.env, community.id, { limit }),
+    listApprovedMembers(c.env, community.id, { limit }),
+    listCommunityPhotos(c.env, community.id, { limit }),
   ]);
 
   return c.json({
-    circle,
+    community,
     host: { name: host.name, headline: host.headline },
     packages,
     events,
@@ -187,27 +187,27 @@ api.get("/circles/:slug", async (c) => {
   });
 });
 
-/** Published gatherings, soonest first. `?circle=`, `?city=` and `?country=` filter. */
+/** Published events, soonest first. `?community=`, `?city=` and `?country=` filter. */
 api.get("/events", async (c) => {
   const limit = readLimit(c);
   if (limit instanceof Response) return limit;
   const place = readPlace(c);
 
-  const circleSlug = c.req.query("circle");
-  if (circleSlug) {
-    // A filter naming a circle that does not exist is a 404, not an empty list —
+  const communitySlug = c.req.query("community");
+  if (communitySlug) {
+    // A filter naming a community that does not exist is a 404, not an empty list —
     // the two mean different things to whoever is reading the response.
-    const circle = await getCircleBySlug(c.env, circleSlug);
-    if (!circle) return c.json({ error: "Circle not found" }, 404);
+    const community = await getCommunityBySlug(c.env, communitySlug);
+    if (!community) return c.json({ error: "Community not found" }, 404);
   }
 
-  const events = await listEvents(c.env, { circleSlug, ...place, limit });
+  const events = await listEvents(c.env, { communitySlug, ...place, limit });
   return c.json({ events });
 });
 
 /**
  * One field across the whole product: community names, taglines and
- * descriptions, gathering titles and summaries, and the names of cities and
+ * descriptions, event titles and summaries, and the names of cities and
  * countries. Case-insensitive substring, grouped, each group bounded by the
  * same `?limit=` as every other list.
  *
@@ -230,7 +230,7 @@ api.get("/search", async (c) => {
 
   const now = new Date();
   const [communities, events, countries, cities] = await Promise.all([
-    searchCircles(c.env, query, { limit }),
+    searchCommunities(c.env, query, { limit }),
     searchEvents(c.env, query, { from: now, limit }),
     listCountries(c.env, { match: query, now, limit }),
     listCities(c.env, { match: query, now, limit }),
@@ -238,14 +238,14 @@ api.get("/search", async (c) => {
   return c.json({ query, communities, events, countries, cities });
 });
 
-/** One gathering, with its circle, who is coming, and its plates. */
+/** One event, with its community, who is coming, and its plates. */
 api.get("/events/:slug", async (c) => {
   const limit = readLimit(c);
   if (limit instanceof Response) return limit;
 
   const found = await getEventBySlug(c.env, c.req.param("slug"));
-  if (!found) return c.json({ error: "Gathering not found" }, 404);
-  const { event, circle } = found;
+  if (!found) return c.json({ error: "Event not found" }, 404);
+  const { event, community } = found;
 
   const [attendees, photos] = await Promise.all([
     listEventAttendees(c.env, event.id, { limit }),
@@ -254,7 +254,7 @@ api.get("/events/:slug", async (c) => {
 
   return c.json({
     event,
-    circle,
+    community,
     attendees: attendees.map((a) => ({ name: a.name, headline: a.headline })),
     photos,
   });
@@ -282,28 +282,28 @@ api.get("/calendar", async (c) => {
 
 /**
  * The signed-in member's own state. This is what the gate reads to check
- * credits, so the keys and their types are fixed: `creditsTotal` and
- * `creditsUsed` are numbers, and `hosting` is in creation order.
+ * tickets, so the keys and their types are fixed: `ticketsTotal` and
+ * `ticketsUsed` are numbers, and `hosting` is in creation order.
  */
 api.get("/me", async (c) => {
   const me = await requireApiUser(c);
   if (me instanceof Response) return me;
 
-  const [memberships, passes, bookings, hosting] = await Promise.all([
+  const [memberships, packages, bookings, hosting] = await Promise.all([
     listMembershipsForUser(c.env, me.user.id),
-    listPassesForUser(c.env, me.user.id),
+    listPackagesForUser(c.env, me.user.id),
     listBookingsForUser(c.env, me.user.id),
-    listHostedCircles(c.env, me.user.id),
+    listHostedCommunities(c.env, me.user.id),
   ]);
 
   return c.json({
     user: { id: me.user.id, email: me.user.email, name: me.user.name },
-    memberships: memberships.map((m) => ({ circleSlug: m.circleSlug, status: m.status })),
-    passes: passes.map((p) => ({
+    memberships: memberships.map((m) => ({ communitySlug: m.communitySlug, status: m.status })),
+    packages: packages.map((p) => ({
       id: p.id,
-      circleSlug: p.circleSlug,
-      creditsTotal: p.creditsTotal,
-      creditsUsed: p.creditsUsed,
+      communitySlug: p.communitySlug,
+      ticketsTotal: p.ticketsTotal,
+      ticketsUsed: p.ticketsUsed,
     })),
     bookings: bookings.map((b) => ({
       code: b.code,

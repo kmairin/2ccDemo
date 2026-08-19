@@ -1,5 +1,5 @@
 /**
- * Who is in a circle, and who is coming to a gathering
+ * Who is in a community, and who is coming to an event
  * (`design/reference/api-contract.md`, Scope addition §B and §C).
  *
  * Both lists use an initials plate rather than an avatar: §7 bans coloured
@@ -66,7 +66,7 @@ function Person(props: { person: PersonEntry; role?: string }) {
 export type MemberListProps = {
   /** Approved members only. Pending members are never shown publicly. */
   members: PersonEntry[];
-  /** The circle's `memberCount`. Must agree with the card and the host console. */
+  /** The community's `memberCount`. Must agree with the card and the host console. */
   total: number;
   /** Shown first and labelled Host. */
   host?: PersonEntry;

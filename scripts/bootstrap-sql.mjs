@@ -33,7 +33,7 @@ const PG_DUMP =
   process.env.PG_DUMP ?? "/opt/homebrew/opt/postgresql@16/bin/pg_dump";
 
 /**
- * Split on semicolons, but only those outside a single-quoted string. Circle
+ * Split on semicolons, but only those outside a single-quoted string. Community
  * descriptions contain punctuation, and a naive `split(";")` would cut a
  * statement in half and produce SQL that fails halfway through the bootstrap.
  */
@@ -301,7 +301,7 @@ const ordered = [
  *
  * WHY THIS EXISTS. `ensure-schema.ts` used to rebuild only when the world
  * looked *unbuilt* — no circles table, no rows, duplicate ids. That check
- * cannot see a change to the SEED. When every circle and gathering gained a
+ * cannot see a change to the SEED. When every community and event gained a
  * `cover_key` and 123 gallery rows gained an `object_key`, production was
  * already populated, so the rebuild never fired and the live site kept serving
  * the old photo-less rows no matter how many times it was deployed.

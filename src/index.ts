@@ -7,6 +7,7 @@ import admin from "./routes/admin";
 import api from "./routes/api";
 import host from "./routes/host";
 import pages from "./routes/pages";
+import redirects from "./routes/redirects";
 import theme, { themeFromRequest } from "./routes/theme";
 import { pageColor } from "./ui/theme";
 
@@ -19,7 +20,14 @@ type Bindings = LoggerEnv &
 const app = new Hono<{ Bindings: Bindings }>();
 
 /**
- * The JSON API — circles, gatherings, the calendar, and the signed-in member.
+ * `/circles…` and `/passes/…` from before the rename. First, so an old link is
+ * answered with a redirect without touching the database. See
+ * src/routes/redirects.ts.
+ */
+app.route("/", redirects);
+
+/**
+ * The JSON API — communities, events, the calendar, and the signed-in member.
  * Mounted here so the router owns its own paths (`/health` inside becomes
  * `/api/health` outside). It also serves the liveness probe.
  */
@@ -43,8 +51,7 @@ app.use("*", async (c, next) => {
  * `Layout` renders one `<html lang="en">` for every page, and the theme is a
  * whole-document property rather than anything a page knows about — so it is
  * applied in one place, here, instead of being threaded as a prop through all
- * nineteen `Layout` call sites (and through `src/routes/pages.tsx`, which has
- * a rename sweep queued behind this change).
+ * nineteen `Layout` call sites.
  *
  * No cookie means no attribute, which is deliberate: CSS then falls through to
  * `prefers-color-scheme`. Both replacements are exact literals this app emits

@@ -31,12 +31,12 @@ export type LayoutProps = {
   title: string;
   description?: string;
   user?: LayoutUser;
-  /** "circles" | "gatherings" | "calendar" | "host" | "account". */
+  /** "communities" | "events" | "calendar" | "host" | "account". */
   active?: string;
   /**
    * The mobile action bar. Rendered after `</main>` and it sets
    * `class="has-actionbar"` on `<body>`, which drives `main`'s bottom padding
-   * without a `:has()` dependency. `/circles/:slug` and `/events/:slug` only.
+   * without a `:has()` dependency. `/communities/:slug` and `/events/:slug` only.
    */
   actionBar?: Child;
   children?: Child;
@@ -49,8 +49,8 @@ const NAV: readonly NavItem[] = [
   // clicking. Countries, cities, search and profiles all existed and none of
   // them were in the header, so none of them could be found.
   { key: "countries", label: "Countries", href: "/countries" },
-  { key: "circles", label: "Communities", href: "/circles" },
-  { key: "gatherings", label: "Events", href: "/events" },
+  { key: "communities", label: "Communities", href: "/communities" },
+  { key: "events", label: "Events", href: "/events" },
   { key: "calendar", label: "Calendar", href: "/calendar" },
   { key: "search", label: "Search", href: "/search" },
 ];

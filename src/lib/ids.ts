@@ -75,8 +75,8 @@ export function slugify(input: string): string {
  * this testable without one:
  *
  *   const slug = await uniqueSlug(slugify(name), async (s) => {
- *     const [row] = await db.select({ id: circles.id }).from(circles)
- *       .where(eq(circles.slug, s)).limit(1);
+ *     const [row] = await db.select({ id: communities.id }).from(communities)
+ *       .where(eq(communities.slug, s)).limit(1);
  *     return row !== undefined;
  *   });
  *

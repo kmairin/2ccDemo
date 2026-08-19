@@ -38,7 +38,7 @@ Five layers, bottom to top:
    On near-black these become tints you cannot name. **Category picks the wash —
    never hash the hue.** A nameable colour looks cheap; randomised hues across
    0–360° are what makes six covers in a grid read as a broken-image set.
-3. **Monogram deboss** — the circle's initials in Fraunces, `font-size:44cqw`,
+3. **Monogram deboss** — the community's initials in Fraunces, `font-size:44cqw`,
    `color:var(--ink-800)`, `-webkit-text-stroke:.5px rgba(174,148,99,.35)`,
    `text-shadow:0 1px 0 rgba(244,239,231,.05), 0 -1px 0 rgba(0,0,0,.6)`. This is
    the plate's *subject* — it is why it can never read as a missing image.
@@ -54,8 +54,8 @@ Deterministic from `h = FNV-1a(slug)`:
 `p = 3+(h%5)` · `h_amp = .28+((h>>8)%40)/200` · `rotate = (h>>12)%360` ·
 `--ox = 18%+((h>>16)%24)%`.
 
-**Payload:** ~9KB inline per plate at 900 samples. Use **320 samples / 2 passes**
-in grids, **900 / 4 passes** on detail heroes. Round coordinates to 1dp and
+**Payload:** ~9KB inline per plate at 900 samples. Use **320 samples / 2 packages**
+in grids, **900 / 4 packages** on detail heroes. Round coordinates to 1dp and
 memoise path strings by `(p, h_amp)`.
 
 **Grain is global, not per-plate.** `feTurbulence type="fractalNoise"
@@ -64,7 +64,7 @@ baseFrequency=".85" numOctaves="3"`, baked once to a 160px tiling data-URI:
 One printed surface across the whole viewport. Above `.05` it reads as a broken
 JPEG.
 
-**Gatherings get a chart rule** instead of a monogram:
+**Events get a chart rule** instead of a monogram:
 `repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 8px)`, every
 5th taller. Instrumentation, not decoration.
 
@@ -89,7 +89,7 @@ JPEG.
 hue) to `#AE9463`, which still clears **6.8:1** on `--ink-950`. `--line` drops
 `.10 → .08`; at `.10` borders look drawn on rather than lit.
 
-**Brass is permitted on:** 1px rules, ≤11px uppercase labels, prices and credit
+**Brass is permitted on:** 1px rules, ≤11px uppercase labels, prices and ticket
 numerals, hover underlines, the focus ring, the guilloché stroke.
 **Brass is banned from:** button backgrounds, badges, chips, gradients, icons,
 body text, headlines, any filled area over 2px tall.
@@ -108,7 +108,7 @@ product: `0 24px 48px -24px rgba(0,0,0,.8)` on the sticky header.
 Fraunces  — display. LOCK THE AXES: font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144
             (default Fraunces is artisanal-bakery; at SOFT 0/WONK 0 it is a severe Didone)
 Inter     — UI.      font-feature-settings:'tnum' 1,'ss01' 1
-IBM Plex Mono 400/500 — NUMERALS ONLY: ticket codes, prices, credits, dates.
+IBM Plex Mono 400/500 — NUMERALS ONLY: ticket codes, prices, tickets, dates.
             Numbers in a machine face is the cheapest "issued document" signal there is.
 ```
 
@@ -130,7 +130,7 @@ Fallbacks: `Fraunces,'Times New Roman',serif` · `Inter,system-ui,sans-serif` ·
 **Two gestures carry the brand, and they appear on all ten screens:**
 
 1. **Rule-and-index** — every section opens with a 24px brass hairline, then a
-   mono numeral and a micro-caps label: `— 03 / GATHERINGS`.
+   mono numeral and a micro-caps label: `— 03 / EVENTS`.
 2. **Optical inset** — heroes get `text-indent:-.055em` so the first glyph sits
    *on* the container edge rather than near it.
 
@@ -152,7 +152,7 @@ opaque cards. They read as a printed index, not floating tiles.
 
 - **375** — 1 column; plates full-bleed past the gutters; `aspect-ratio:4/3`; text inset 20px.
 - **768** — 2 columns; `3/2`.
-- **1280** — circles 3 columns, gatherings 2. Heroes and section headers cap at
+- **1280** — communities 3 columns, events 2. Heroes and section headers cap at
   **8 of 12 columns**, so the right third stays deliberately empty. Target ~55%
   unfilled ink at rest; one idea per screenful.
 
@@ -162,16 +162,16 @@ opaque cards. They read as a printed index, not floating tiles.
 
 | Screen | The one move |
 | --- | --- |
-| **Landing** | One sentence at `--t-hero` in the left 8 columns, nothing else above the fold. Then a subline defining all four nouns in one breath. Featured circles start a full viewport down. Add 80–120 words of real editorial on what a gathering *is* — hero + three cards is a template. |
-| **Circles** | Filters as a micro-caps hairline row, active marked by a 1px brass underline. **Never pills.** |
-| **Circle** | Full-bleed plate with the name overlapping its lower edge at `margin-top:-.4em`. The three passes are **one bordered table with hairline dividers**, not three pricing cards. |
-| **Gatherings** | A **ledger, not a grid**: 88px mono date column, hairline rows, 64px square plate thumb. Month group headers. Needs 18–24 rows to look real. |
-| **Gathering** | When/where as a micro-caps definition list. "4 places left" is the only large brass number in the product. |
+| **Landing** | One sentence at `--t-hero` in the left 8 columns, nothing else above the fold. Then a subline defining all four nouns in one breath. Featured communities start a full viewport down. Add 80–120 words of real editorial on what an event *is* — hero + three cards is a template. |
+| **Communities** | Filters as a micro-caps hairline row, active marked by a 1px brass underline. **Never pills.** |
+| **Community** | Full-bleed plate with the name overlapping its lower edge at `margin-top:-.4em`. The three packages are **one bordered table with hairline dividers**, not three pricing cards. |
+| **Events** | A **ledger, not a grid**: 88px mono date column, hairline rows, 64px square plate thumb. Month group headers. Needs 18–24 rows to look real. |
+| **Event** | When/where as a micro-caps definition list. "4 places left" is the only large brass number in the product. |
 | **Join** | **No card.** A 420px column on bare ink, invitation line in Fraunces italic, inputs `border:0;border-bottom:1px solid var(--line)`. Add an invitation-code field, four lines of membership terms, and what happens next — three inputs on black looks unbuilt. |
-| **Account** | Credits drawn as **N hairline squares, filled = spent** — not a progress bar. This detail sells the product. Add a credit ledger (bought/spent/left with dates), past bookings, and each circle's next date. |
-| **Ticket** | Code in Plex Mono at `--t-code` on a plate; double-rule frame (1px `--brass-hair` plus a 1px inset at 4px); perforation dots down one edge via `repeating-linear-gradient`. Add venue address, what to bring, which pass it drew from, cancellation deadline, and a drawn SVG seal so it reads as an object. |
+| **Account** | Tickets drawn as **N hairline squares, filled = spent** — not a progress bar. This detail sells the product. Add a ticket ledger (bought/spent/left with dates), past bookings, and each community's next date. |
+| **Ticket** | Code in Plex Mono at `--t-code` on a plate; double-rule frame (1px `--brass-hair` plus a 1px inset at 4px); perforation dots down one edge via `repeating-linear-gradient`. Add venue address, what to bring, which package it drew from, cancellation deadline, and a drawn SVG seal so it reads as an object. |
 | **Host** | Deliberately **plainer**: no plates, rules only. Back-of-house as ledger makes front-of-house feel precious. |
-| **Manage** | Everything tabular with `tnum`. Status is uppercase micro text in `--ivory-dim`/`--brass`, never a coloured chip. Show attendee names, per-gathering fill (`9 of 12`), pending members with request dates, revenue to date. |
+| **Manage** | Everything tabular with `tnum`. Status is uppercase micro text in `--ivory-dim`/`--brass`, never a coloured chip. Show attendee names, per-event fill (`9 of 12`), pending members with request dates, revenue to date. |
 
 ---
 
@@ -183,12 +183,12 @@ timeless, effortless, sanctuary, world-class, journey, "experience" as a noun,
 "where X meets Y", "not just X — Y".
 
 - 2–4 sentences, 12–20 words each. No fragments-as-rhetoric.
-- **A circle description must contain four things:** a named real person and what
+- **A community description must contain four things:** a named real person and what
   they do, a cadence, a physical specific, and **one constraint**. Constraints are
   the strongest realness signal — generators never invent friction.
 - **Prices:** `€180`, never `€180.00`, never "from". Show the derivation:
-  `€180 · 3 gatherings · €60 each`. **Season must not be exactly 6× Single.**
-  Currency follows the circle's country.
+  `€180 · 3 events · €60 each`. **Season must not be exactly 6× Single.**
+  Currency follows the community's country.
 - **Times are real minutes** (`06:40`), durations vary. Not everything on the hour.
 - **Empty states:** fact + next action. No apology, no illustration, no
   exclamation mark.
@@ -198,8 +198,8 @@ timeless, effortless, sanctuary, world-class, journey, "experience" as a noun,
 > ✓ "Tomas Ek keeps three ice baths and a sauna in a pump house in Södermalm.
 > Four rounds, 3°C, no phones. Twelve places, Tuesdays and Saturdays, 06:30."
 
-> ✗ "No gatherings yet — exciting things on the horizon. Check back soon!"
-> ✓ "No gatherings scheduled. Åsa posts the summer calendar in March."
+> ✗ "No events yet — exciting things on the horizon. Check back soon!"
+> ✓ "No events scheduled. Åsa posts the summer calendar in March."
 
 ---
 
@@ -220,16 +220,16 @@ Maximum **six** hand-drawn 1px-stroke SVG icons in the entire product, 16px,
 
 ## 8. Credibility checklist — verify each before sign-off
 
-- `memberCount` on the card == members on the circle page == approved count in host console.
+- `memberCount` on the card == members on the community page == approved count in host console.
 - `placesLeft` == capacity − confirmed bookings, and it visibly drops after booking **on every page that shows it**.
-- `eventCount` == upcoming gatherings listed.
-- Booking: credits drop on `/account`; the ticket names the pass it drew from. Cancelling puts the credit back. Verify on both pages.
-- Repeat booking spends no second credit. The at-capacity refusal and the no-credit banner are both reachable and styled.
+- `eventCount` == upcoming events listed.
+- Booking: tickets drop on `/account`; the ticket names the package it drew from. Cancelling puts the ticket back. Verify on both pages.
+- Repeat booking spends no second ticket. The at-capacity refusal and the no-ticket banner are both reachable and styled.
 - Dates spread: one tomorrow, one this weekend, one three months out. Times off the hour. Durations vary.
-- Circles have 2–6 gatherings, not all three. **One is full. One is private with a pending request. One has exactly 1 place left. One has no upcoming gatherings** (so the empty state is real, not theoretical).
+- Communities have 2–6 events, not all three. **One is full. One is private with a pending request. One has exactly 1 place left. One has no upcoming events** (so the empty state is real, not theoretical).
 - Member counts are odd numbers (47, 112) — never 100/250/500.
-- One host per circle; name and nationality matching the city; each with a distinct one-line credential.
-- 404 for a bad slug and 403 for someone else's circle are both **styled pages**, not stack traces.
+- One host per community; name and nationality matching the city; each with a distinct one-line credential.
+- 404 for a bad slug and 403 for someone else's community are both **styled pages**, not stack traces.
 
 ---
 
@@ -253,7 +253,7 @@ the glass.**
 
 - Opaque `background: var(--ink-900)`, `border-block-start: 1px solid var(--line-strong)`,
   and the product's one permitted shadow `0 -12px 32px rgba(0,0,0,.45)`.
-- It exists on **`/circles/:slug` and `/events/:slug` only** — never global.
+- It exists on **`/communities/:slug` and `/events/:slug` only** — never global.
 - Everything else from interaction craft's spec stands: `position:fixed`,
   `min-height:52px`, `env(safe-area-inset-*)` padding, the server-set
   `class="has-actionbar"` on `<body>` driving `main { padding-block-end: … }`
@@ -269,12 +269,12 @@ sRGB ratios, `--ink-950 #0A0A0B` and `--ink-800 #17171A`:
 
 | Token | Proposed | Measured on ink-950 | Verdict |
 | --- | --- | --- | --- |
-| `--ivory` | `#F4EFE7` | 17.29:1 | pass |
-| `--ivory-2` | `#CFC8BC` | 11.91:1 | pass |
-| `--ivory-dim` | `#A9A399` | 7.90:1 | pass |
-| `--brass` | `#AE9463` | **6.80:1** | pass — the desaturation is safe |
-| `--brass-lit` | `#D8C39A` | 11.49:1 | pass |
-| `--warn` | `#D98A6A` | 7.34:1 | pass |
+| `--ivory` | `#F4EFE7` | 17.29:1 | package |
+| `--ivory-2` | `#CFC8BC` | 11.91:1 | package |
+| `--ivory-dim` | `#A9A399` | 7.90:1 | package |
+| `--brass` | `#AE9463` | **6.80:1** | package — the desaturation is safe |
+| `--brass-lit` | `#D8C39A` | 11.49:1 | package |
+| `--warn` | `#D98A6A` | 7.34:1 | package |
 | `--ivory-faint` | `#6E6A64` | **3.68:1** | **FAILS AA body** |
 | `--slate` | `#6B7683` | **4.28:1** | **FAILS AA body** |
 | `--rust` | `#8E5A46` | **3.49:1** | **FAILS AA body** |
@@ -340,7 +340,7 @@ duration and `scroll-behavior`.
   on an ivory-filled button.
 - Skip link to `<main id="main" tabindex="-1">`. One `<h1>` per page = the subject.
   Card titles are `<h3>` under a section `<h2>`. The wordmark is a link, not a heading.
-- **Pass purchase needs a one-time nonce.** Booking is already idempotent via the
+- **Package purchase needs a one-time nonce.** Booking is already idempotent via the
   unique index, but a double-tap on "Buy Trio" creates two orders. Hidden
   `name="nonce"`, burned server-side on first POST; a replay 302s with
   "already processed". Do not rely on `disabled`-on-submit.
@@ -377,7 +377,7 @@ almost exactly, so it cannot tint near-black; raising opacity does not rescue it
 values are unchanged. This lands in the band the council actually wanted —
 perceptible as difference, not identifiable as a colour.
 
-Also corrected: `initials()` returned a single letter for a one-word circle name
+Also corrected: `initials()` returned a single letter for a one-word community name
 ("Nightform" → "N"), which reads thinner than the two-letter monograms beside it
 in a grid. One-word names take their first two letters ("NI").
 
@@ -389,7 +389,7 @@ not a design decision until someone composites it and counts the levels. Both
 
 §10.4's second assertion ("no element with `getBoundingClientRect().right >
 viewport width") fails on four pages while the first assertion legitimately
-passes. Every one of the 137 flagged elements is a descendant of a container
+packages. Every one of the 137 flagged elements is a descendant of a container
 that is **specified** to scroll horizontally: `div.gallery`
 (`overflow-x:auto`, scrollWidth 1760 / clientWidth 335) and `div.bordered.scroll-x`
 around the wide host-console tables. Zero offenders sit outside a scroller on any
@@ -410,18 +410,18 @@ the work.
 
 | # | Finding | Fix | Verified |
 | --- | --- | --- | --- |
-| A | **Blocking.** The footer rendered *under* the fixed mobile action bar on `/circles/:slug` and `/events/:slug`; two links unreachable. Clearance padding sat on `.site-main`, but the footer is a **sibling** of `<main>`, so it received none. | Move clearance to `body.has-actionbar`, zero it on `.site-main`, and drop it entirely at ≥900px. | Bar 65px, body padding-block-end **76px** → footer went from **32.8px occluded** to **11px clear**. |
+| A | **Blocking.** The footer rendered *under* the fixed mobile action bar on `/communities/:slug` and `/events/:slug`; two links unreachable. Clearance padding sat on `.site-main`, but the footer is a **sibling** of `<main>`, so it received none. | Move clearance to `body.has-actionbar`, zero it on `.site-main`, and drop it entirely at ≥900px. | Bar 65px, body padding-block-end **76px** → footer went from **32.8px occluded** to **11px clear**. |
 | B | Inline actions measured 15–25px tall (calendar day links, account ledger rows). | `min-height:44px` with negative block margin so the hit area grows without moving the layout; 48px under `pointer:coarse`. | typecheck 0 |
 | C | `.btn--quiet` at 44px against a 48px floor. | `min-height:48px`. | typecheck 0 |
 | D | `favicon.ico` 404 — the only console error in the product. | Inline SVG data-URI monogram in `<head>`. | `rel="icon"` present; request no longer 404s. |
 | E | Horizontal scrollers had `tabIndex −1`, hiding up to 275px from keyboard users. | `tabindex={0}` on all 11 `.scroll-x` containers, plus a `:focus-visible` ring. | typecheck 0; rendered focusable. |
-| — | Monograms collided on leading articles ("The Cold Room"/"The Bica Table"/"The Sunrise Court" → T-something). | `initials()` drops a leading article. | 6 circles → 6 distinct monograms: BT, CS, SC, CR, EP, NI. |
+| — | Monograms collided on leading articles ("The Cold Room"/"The Bica Table"/"The Sunrise Court" → T-something). | `initials()` drops a leading article. | 6 communities → 6 distinct monograms: BT, CS, SC, CR, EP, NI. |
 
 **Approved deviation from §1:** the guilloché is drawn as a multi-turn spiral
 rather than a single revolution. The literal §1 parameters produce a *curtate*
-epitrochoid — a circle with a 6% ripple — which rendered as one faint stray
+epitrochoid — a community with a 6% ripple — which rendered as one faint stray
 outline, the exact sparse failure §1 bans. Formula, the four hashed parameters,
-stroke, opacity, pass count and 3° step are unchanged; only how far `t` runs.
+stroke, opacity, package count and 3° step are unchanged; only how far `t` runs.
 On budget at 6.1–9.8KB per grid plate.
 
 ---
@@ -431,7 +431,7 @@ On budget at 6.1–9.8KB per grid plate.
 §0–§2 answered one question: **"how do we look expensive with zero
 photography?"** Near-black plus brass, and a generated engraved plate as the
 hero, were good answers to it. There are now **36 real photographs** in
-`design/assets/photos/`, wired to every circle and every gathering, so the
+`design/assets/photos/`, wired to every community and every event, so the
 question no longer exists and neither does the answer.
 
 **Everything else in this file stands unchanged** — the type system (§3),
@@ -517,7 +517,7 @@ Replaced by three things, in order of how much work they do:
    on the page.
 
 `--accent` (`#7A5C2E`, a dark umber) keeps brass's exact permissions and exact
-bans from §2: 1px rules, ≤11px uppercase labels, prices and credit numerals,
+bans from §2: 1px rules, ≤11px uppercase labels, prices and ticket numerals,
 hover underlines, the focus ring, the guilloché stroke — and **never** a fill,
 a badge, a chip, a gradient, an icon, body text or a headline. The one primary
 CTA per screen inverts with the theme: `--ink` fill, `--paper` text.

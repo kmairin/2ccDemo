@@ -39,10 +39,10 @@ import { formatDay, formatTime, plural } from "../lib/format";
 import { DEFAULT_LIMIT, MAX_LIMIT } from "../services/common";
 import {
   getMemberProfile,
-  listApprovedCirclesForMember,
+  listApprovedCommunitiesForMember,
   listUpcomingEventsForMember,
   updateMemberProfile,
-  type MemberCircle,
+  type MemberCommunity,
   type MemberEvent,
   type MemberProfile,
 } from "../services/members";
@@ -66,7 +66,7 @@ const MAX_BIO = 600;
 /** A date or a code cannot wrap; the table scrolls in its own box instead (§10.4). */
 const NOWRAP = "white-space:nowrap";
 
-/** `.pass-table` is `width:100%`, so a minimum width is what makes `.scroll-x` scroll. */
+/** `.package-table` is `width:100%`, so a minimum width is what makes `.scroll-x` scroll. */
 function wide(rem: number): string {
   return `min-width:${rem}rem`;
 }
@@ -141,15 +141,15 @@ function notFoundPage(c: PageContext, me: SessionUser | null): Response | Promis
         index="00"
         label="Not found"
         title="No such member"
-        lede="Nobody here answers to that. Members are listed on the circle they belong to."
+        lede="Nobody here answers to that. Members are listed on the community they belong to."
       />
       <Section index="01" label="Elsewhere" title="Where to go instead">
         <div class="row">
-          <Button href="/circles" variant="ghost">
-            The circles
+          <Button href="/communities" variant="ghost">
+            The communities
           </Button>
           <Button href="/events" variant="quiet">
-            All gatherings
+            All events
           </Button>
         </div>
       </Section>
@@ -163,14 +163,14 @@ function notFoundPage(c: PageContext, me: SessionUser | null): Response | Promis
 type ProfilePageProps = {
   viewer: { name: string } | null;
   member: MemberProfile;
-  circles: MemberCircle[];
+  communities: MemberCommunity[];
   attending: MemberEvent[];
   /** Their own profile: offer the form rather than making them find it. */
   isSelf: boolean;
 };
 
 function MemberProfilePage(props: ProfilePageProps) {
-  const { viewer, member, circles, attending, isSelf } = props;
+  const { viewer, member, communities, attending, isSelf } = props;
   const who = isSelf ? "You are" : `${firstName(member.name)} is`;
 
   return (
@@ -193,7 +193,7 @@ function MemberProfilePage(props: ProfilePageProps) {
           <span class="stack">
             {member.city !== null ? <span class="meta">{member.city}</span> : null}
             <span class="meta num">
-              {plural(circles.length, "circle", "circles")} ·{" "}
+              {plural(communities.length, "community", "communities")} ·{" "}
               {plural(attending.length, "date booked", "dates booked")}
             </span>
           </span>
@@ -220,44 +220,44 @@ function MemberProfilePage(props: ProfilePageProps) {
           ) : (
             <EmptyState
               title="No note yet."
-              note={`${firstName(member.name)} has not written one. The circles below are the record.`}
+              note={`${firstName(member.name)} has not written one. The communities below are the record.`}
             />
           )}
         </div>
       </Section>
 
-      <Section index="03" label="Circles" title="Where they belong">
-        {circles.length === 0 ? (
+      <Section index="03" label="Communities" title="Where they belong">
+        {communities.length === 0 ? (
           <EmptyState
-            title={`${who} not in a circle yet.`}
-            note="A circle admits members by pass or by the host's say-so."
-            action={{ href: "/circles", label: "The directory" }}
+            title={`${who} not in a community yet.`}
+            note="A community admits members by package or by the host's say-so."
+            action={{ href: "/communities", label: "The directory" }}
           />
         ) : (
-          <div class="bordered scroll-x" tabindex={0} data-circles="">
-            <table class="pass-table" style={wide(26)}>
-              <caption class="vh">Circles {member.name} belongs to</caption>
+          <div class="bordered scroll-x" tabindex={0} data-communities="">
+            <table class="package-table" style={wide(26)}>
+              <caption class="vh">Communities {member.name} belongs to</caption>
               <thead style={NOWRAP}>
                 <tr>
-                  <th scope="col">Circle</th>
+                  <th scope="col">Community</th>
                   <th scope="col">Where</th>
                 </tr>
               </thead>
               <tbody>
-                {circles.map((circle) => (
+                {communities.map((community) => (
                   <tr>
                     <th scope="row">
-                      <a href={`/circles/${circle.slug}`}>{circle.name}</a>
-                      <span class="pass-derivation">
-                        <Badge tone={circle.role === "host" ? "brass" : "quiet"}>
-                          {circle.role === "host" ? "Host" : "Member"}
+                      <a href={`/communities/${community.slug}`}>{community.name}</a>
+                      <span class="package-derivation">
+                        <Badge tone={community.role === "host" ? "brass" : "quiet"}>
+                          {community.role === "host" ? "Host" : "Member"}
                         </Badge>{" "}
-                        {circle.category}
+                        {community.category}
                       </span>
                     </th>
                     <td>
-                      {circle.city}
-                      <span class="pass-derivation">{circle.tagline}</span>
+                      {community.city}
+                      <span class="package-derivation">{community.tagline}</span>
                     </td>
                   </tr>
                 ))}
@@ -271,17 +271,17 @@ function MemberProfilePage(props: ProfilePageProps) {
         {attending.length === 0 ? (
           <EmptyState
             title="Nothing booked."
-            note="Places show here once a credit is spent on a date still to come."
+            note="Places show here once a ticket is spent on a date still to come."
             action={{ href: "/events", label: "The ledger" }}
           />
         ) : (
           <div class="bordered scroll-x" tabindex={0} data-attending="">
-            <table class="pass-table" style={wide(28)}>
-              <caption class="vh">Gatherings {member.name} is going to</caption>
+            <table class="package-table" style={wide(28)}>
+              <caption class="vh">Events {member.name} is going to</caption>
               <thead style={NOWRAP}>
                 <tr>
                   <th scope="col">Date</th>
-                  <th scope="col">Gathering</th>
+                  <th scope="col">Event</th>
                 </tr>
               </thead>
               <tbody>
@@ -291,12 +291,12 @@ function MemberProfilePage(props: ProfilePageProps) {
                     <tr>
                       <td class="num" style={NOWRAP}>
                         {formatDay(startsAt)}
-                        <span class="pass-derivation num">{formatTime(startsAt)}</span>
+                        <span class="package-derivation num">{formatTime(startsAt)}</span>
                       </td>
                       <th scope="row">
                         <a href={`/events/${event.slug}`}>{event.title}</a>
-                        <span class="pass-derivation">
-                          <a href={`/circles/${event.circleSlug}`}>{event.circleName}</a> ·{" "}
+                        <span class="package-derivation">
+                          <a href={`/communities/${event.communitySlug}`}>{event.communityName}</a> ·{" "}
                           {event.venue}, {event.city}
                         </span>
                       </th>
@@ -317,8 +317,8 @@ profile.get("/members/:id", async (c) => {
   const member = await getMemberProfile(c.env, c.req.param("id"));
   if (!member) return notFoundPage(c, me);
 
-  const [circles, attending] = await Promise.all([
-    listApprovedCirclesForMember(c.env, member.id, { limit: ROW_LIMIT }),
+  const [communities, attending] = await Promise.all([
+    listApprovedCommunitiesForMember(c.env, member.id, { limit: ROW_LIMIT }),
     listUpcomingEventsForMember(c.env, member.id, new Date(), { limit: ROW_LIMIT }),
   ]);
 
@@ -327,7 +327,7 @@ profile.get("/members/:id", async (c) => {
     <MemberProfilePage
       viewer={me ? { name: me.user.name } : null}
       member={member}
-      circles={circles}
+      communities={communities}
       attending={attending}
       isSelf={me !== null && me.user.id === member.id}
     />,
@@ -361,7 +361,7 @@ function EditProfilePage(props: EditPageProps) {
         index="01"
         label="Profile"
         title="How members see you"
-        lede="Four things: your name, one line on what you do, your city, and a short note. Members of a circle you join see all four. Nobody sees your email."
+        lede="Four things: your name, one line on what you do, your city, and a short note. Members of a community you join see all four. Nobody sees your email."
       >
         <Button href={`/members/${user.id}`} variant="quiet">
           See your public profile
@@ -495,7 +495,7 @@ profile.post("/account/profile", async (c) => {
     bio: orNull(form.bio),
   });
 
-  await setFlash(c.env, me.session.id, "Profile saved. Members of your circles see it now.");
+  await setFlash(c.env, me.session.id, "Profile saved. Members of your communities see it now.");
   return c.redirect("/account/profile", 302);
 });
 
@@ -520,7 +520,7 @@ profile.get("/api/members/:id", async (c) => {
   if (!member) return c.json({ error: "Member not found" }, 404);
 
   const [communities, attending] = await Promise.all([
-    listApprovedCirclesForMember(c.env, member.id, { limit }),
+    listApprovedCommunitiesForMember(c.env, member.id, { limit }),
     listUpcomingEventsForMember(c.env, member.id, new Date(), { limit }),
   ]);
 

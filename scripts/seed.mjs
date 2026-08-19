@@ -14,19 +14,19 @@
  *     then inserts. Run it ten times and the counts do not move. It never
  *     DROPs anything: the table shape belongs to `drizzle/`, not to the seed.
  *   - **Stable keys.** Ids, order references and ticket codes are derived from
- *     a hash of what they name, not from randomness, so `/circles/nightform`
+ *     a hash of what they name, not from randomness, so `/communities/nightform`
  *     and `/account/tickets/2CC-TKT-...` still resolve after a reseed. Only
- *     the dates move, because the gatherings have to stay in the future.
+ *     the dates move, because the events have to stay in the future.
  *
  * It is also self-checking. The block of assertions at the bottom of
- * `buildRows()` refuses to write a world that would make a page lie: a pass
- * whose credits do not match its bookings, a gathering over capacity, an
+ * `buildRows()` refuses to write a world that would make a page lie: a package
+ * whose tickets do not match its bookings, an event over capacity, an
  * attendee who is not an approved member, a date in the past, a price ladder
  * that does not fall. Read those assertions as the specification of what
  * "staged correctly" means here.
  *
  * Copy in this file follows `design/reference/design-decisions.md` §6 — every
- * circle description names a person and what they do, gives a cadence, gives a
+ * community description names a person and what they do, gives a cadence, gives a
  * physical detail, and states one constraint. The assertions check sentence
  * length; the banned-word list is checked by grep, not by code.
  *
@@ -89,7 +89,7 @@ const DAY_MS = 86_400_000;
 /** `n` days before the run, for plausible "joined a while ago" timestamps. */
 const daysAgo = (n) => new Date(NOW.getTime() - n * DAY_MS);
 
-/** A UTC wall-clock instant `days` from today. Every gathering is built with this. */
+/** A UTC wall-clock instant `days` from today. Every event is built with this. */
 function at(days, hour, minute) {
   return new Date(
     Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth(), NOW.getUTCDate() + days, hour, minute, 0, 0),
@@ -98,7 +98,7 @@ function at(days, hour, minute) {
 
 /**
  * Days from today to the coming Saturday, never fewer than two — so the
- * "this weekend" gathering is genuinely this weekend and never collides with
+ * "this weekend" event is genuinely this weekend and never collides with
  * the "tomorrow" one.
  */
 const WEEKEND = (() => {
@@ -120,7 +120,7 @@ const USERS = [
     name: "Rafael Ortiz",
     city: "Monaco",
     headline: "Skipper, twenty-two Atlantic crossings",
-    bio: "Keeps other people's wooden boats alive for a living and sails them harder than their owners do. Two circles, both under sail.",
+    bio: "Keeps other people's wooden boats alive for a living and sails them harder than their owners do. Two communities, both under sail.",
     joined: 780,
   },
   {
@@ -326,14 +326,14 @@ const USERS = [
 const userId = (key) => uid(`user:${key}`);
 
 // ---------------------------------------------------------------------------
-// Circles
+// Communities
 //
-// Six circles, all five categories, one host each, and the host's name matches
+// Six communities, all five categories, one host each, and the host's name matches
 // the place. Every description does the four things §6 asks for: a named person
 // and their work, a cadence, something physical, and one constraint.
 // ---------------------------------------------------------------------------
 
-const CIRCLES = [
+const COMMUNITIES = [
   {
     key: "cap-ferrat",
     slug: "cap-ferrat-sailing-society",
@@ -350,7 +350,7 @@ const CIRCLES = [
     isPrivate: false,
     founded: 620,
     currency: "EUR",
-    // Single / Trio / Season. Per credit: 135 → 120 → 110. Season is €660, and
+    // Single / Trio / Season. Per ticket: 135 → 120 → 110. Season is €660, and
     // six Singles would be €810, so nobody can read the Season as a bulk unit.
     prices: [13500, 36000, 66000],
   },
@@ -370,7 +370,7 @@ const CIRCLES = [
     isPrivate: false,
     founded: 300,
     currency: "EUR",
-    // Per credit: 165 → 150 → 138. Six Singles is €990 against a €828 Season.
+    // Per ticket: 165 → 150 → 138. Six Singles is €990 against a €828 Season.
     prices: [16500, 45000, 82800],
   },
   {
@@ -389,7 +389,7 @@ const CIRCLES = [
     isPrivate: false,
     founded: 455,
     currency: "USD",
-    // Per credit: 95 → 85 → 78. Six Singles is $570 against a $468 Season.
+    // Per ticket: 95 → 85 → 78. Six Singles is $570 against a $468 Season.
     prices: [9500, 25500, 46800],
   },
   {
@@ -408,7 +408,7 @@ const CIRCLES = [
     isPrivate: false,
     founded: 690,
     currency: "EUR",
-    // Per credit: 120 → 110 → 102. Six Singles is €720 against a €612 Season.
+    // Per ticket: 120 → 110 → 102. Six Singles is €720 against a €612 Season.
     prices: [12000, 33000, 61200],
   },
   {
@@ -427,7 +427,7 @@ const CIRCLES = [
     isPrivate: false,
     founded: 500,
     currency: "AED",
-    // Per credit: 240 → 220 → 204. Six Singles is 1,440 against a 1,224 Season.
+    // Per ticket: 240 → 220 → 204. Six Singles is 1,440 against a 1,224 Season.
     prices: [24000, 66000, 122400],
   },
   {
@@ -446,24 +446,26 @@ const CIRCLES = [
     isPrivate: true,
     founded: 280,
     currency: "THB",
-    // Per credit: 3,800 → 3,500 → 3,200. Six Singles is 22,800 against 19,200.
+    // Per ticket: 3,800 → 3,500 → 3,200. Six Singles is 22,800 against 19,200.
     prices: [380000, 1050000, 1920000],
   },
 ];
 
-const circleId = (key) => uid(`circle:${key}`);
+// The `circle:` prefix is a hash input, not a name anyone reads. Renaming it
+// would move every seeded UUID for no gain — see the note in src/schema.ts.
+const communityId = (key) => uid(`circle:${key}`);
 
-/** Single / Trio / Season, in that display order, priced per circle. */
+/** Single / Trio / Season, in that display order, priced per community. */
 const PACKAGE_TIERS = [
-  { name: "Single", credits: 1, sortOrder: 0 },
-  { name: "Trio", credits: 3, sortOrder: 1 },
-  { name: "Season", credits: 6, sortOrder: 2 },
+  { name: "Single", tickets: 1, sortOrder: 0 },
+  { name: "Trio", tickets: 3, sortOrder: 1 },
+  { name: "Season", tickets: 6, sortOrder: 2 },
 ];
 
-const packageId = (circleKey, name) => uid(`package:${circleKey}:${name}`);
+const packageId = (communityKey, name) => uid(`package:${communityKey}:${name}`);
 
 // ---------------------------------------------------------------------------
-// Gatherings
+// Events
 //
 // Every one of them is in the future, because the day offsets are counted from
 // the moment the seed runs. One is tomorrow, one is this coming Saturday, one
@@ -472,14 +474,14 @@ const packageId = (circleKey, name) => uid(`package:${circleKey}:${name}`);
 // no two durations are copied from each other.
 //
 // `attendees` are the confirmed bookings. Each name must be an approved member
-// of the circle and each one spends a credit from a pass, both checked below.
+// of the community and each one spends a ticket from a package, both checked below.
 // ---------------------------------------------------------------------------
 
 const EVENTS = [
-  // --- Cap Ferrat Sailing Society: six gatherings, five of them published ---
+  // --- Cap Ferrat Sailing Society: six events, five of them published ---
   {
     key: "cf-shakedown",
-    circle: "cap-ferrat",
+    community: "cap-ferrat",
     slug: "shakedown-sail-to-villefranche",
     title: "Shakedown Sail to Villefranche",
     summary: "Three boats out of Port Hercule, two hours under sail, then lunch at anchor.",
@@ -499,7 +501,7 @@ const EVENTS = [
   },
   {
     key: "cf-night-crossing",
-    circle: "cap-ferrat",
+    community: "cap-ferrat",
     slug: "night-crossing-to-saint-tropez",
     title: "Night Crossing to Saint-Tropez",
     summary: "Fifty-eight miles west overnight, two watches, and breakfast at anchor off Pampelonne.",
@@ -519,7 +521,7 @@ const EVENTS = [
   },
   {
     key: "cf-regatta",
-    circle: "cap-ferrat",
+    community: "cap-ferrat",
     slug: "regatta-saturday-and-the-lunch-after",
     title: "Regatta Saturday, and the Lunch After",
     summary: "A pursuit race round the Tête de Chien mark, then a table held from two.",
@@ -551,7 +553,7 @@ const EVENTS = [
   },
   {
     key: "cf-bonifacio",
-    circle: "cap-ferrat",
+    community: "cap-ferrat",
     slug: "the-bonifacio-run",
     title: "The Bonifacio Run",
     summary: "Two days across to Corsica and back, sleeping aboard in the Bouches de Bonifacio.",
@@ -571,7 +573,7 @@ const EVENTS = [
   },
   {
     key: "cf-lay-up",
-    circle: "cap-ferrat",
+    community: "cap-ferrat",
     slug: "lay-up-day-and-the-long-lunch",
     title: "Lay-Up Day, and the Long Lunch",
     summary: "Winter covers on nine hulls in a morning, then the last table of the year.",
@@ -591,7 +593,7 @@ const EVENTS = [
   },
   {
     key: "cf-antibes",
-    circle: "cap-ferrat",
+    community: "cap-ferrat",
     slug: "spring-delivery-to-antibes",
     title: "Spring Delivery to Antibes",
     summary: "Taking two boats down to Antibes for the spring rigging, and crew are wanted.",
@@ -609,11 +611,11 @@ const EVENTS = [
     attendees: [],
   },
 
-  // --- Es Freus Passage: two gatherings, both still drafts, so this circle ---
+  // --- Es Freus Passage: two events, both still drafts, so this community ---
   // --- has nothing upcoming and the empty state is a real page, not a theory ---
   {
     key: "ef-first-crossing",
-    circle: "es-freus",
+    community: "es-freus",
     slug: "first-crossing-of-the-season",
     title: "First Crossing of the Season",
     summary: "The season opens with the run down to Illetes, weather permitting and not before.",
@@ -633,7 +635,7 @@ const EVENTS = [
   },
   {
     key: "ef-formentera",
-    circle: "es-freus",
+    community: "es-freus",
     slug: "formentera-overnight",
     title: "Formentera Overnight",
     summary: "Across in the afternoon, a night on the hook at Espalmador, back after breakfast.",
@@ -651,10 +653,10 @@ const EVENTS = [
     attendees: [],
   },
 
-  // --- The Cold Room: five gatherings, four published. The first is tomorrow ---
+  // --- The Cold Room: five events, four published. The first is tomorrow ---
   {
     key: "cr-first-light",
-    circle: "cold-room",
+    community: "cold-room",
     slug: "first-light-plunge",
     title: "First Light Plunge",
     summary: "Breathwork on the deck, two rounds in the lake, then the stove in the hut.",
@@ -674,7 +676,7 @@ const EVENTS = [
   },
   {
     key: "cr-heat-first",
-    circle: "cold-room",
+    community: "cold-room",
     slug: "heat-first-cold-last",
     title: "Heat First, Cold Last",
     summary: "Ninety minutes of sauna, three rounds, and the cold water saved for the end.",
@@ -694,12 +696,12 @@ const EVENTS = [
   },
   {
     key: "cr-long-saturday",
-    circle: "cold-room",
+    community: "cold-room",
     slug: "the-long-saturday-at-maroon-creek",
     title: "The Long Saturday at Maroon Creek",
     summary: "Six hours outdoors: two rounds in the lake, a walk to the second bench, and lunch.",
     description:
-      "The one gathering of the season where nobody is expected anywhere else afterwards. " +
+      "The one event of the season where nobody is expected anywhere else afterwards. " +
       "Two rounds in the water either side of a long walk, then heat in the lodge. " +
       "Numbers stop at twenty because the lodge stove cannot dry more towels than that.",
     venue: "Maroon Creek Lodge",
@@ -714,7 +716,7 @@ const EVENTS = [
   },
   {
     key: "cr-ice-cutting",
-    circle: "cold-room",
+    community: "cold-room",
     slug: "ice-cutting-at-six",
     title: "Ice Cutting at Six",
     summary: "Wes teaches the saw, the chain and the order of cuts, then everyone gets in.",
@@ -734,7 +736,7 @@ const EVENTS = [
   },
   {
     key: "cr-spring-melt",
-    circle: "cold-room",
+    community: "cold-room",
     slug: "spring-melt-session",
     title: "Spring Melt Session",
     summary: "The last session before the lake warms past the point of being worth it.",
@@ -755,7 +757,7 @@ const EVENTS = [
   // --- The Bica Table: four published. The first one is sold out ---
   {
     key: "bt-fire-table",
-    circle: "bica-table",
+    community: "bica-table",
     slug: "fire-table-xi-the-alentejo-pig",
     title: "Fire Table XI: The Alentejo Pig",
     summary: "One black-footed pig from Barrancos, on the oak from three, served from eight.",
@@ -775,7 +777,7 @@ const EVENTS = [
   },
   {
     key: "bt-market-walk",
-    circle: "bica-table",
+    community: "bica-table",
     slug: "market-walk-then-breakfast",
     title: "Market Walk, Then Breakfast",
     summary: "Ninety minutes through Campo de Ourique with Sebastião, then breakfast from what we carried out.",
@@ -795,7 +797,7 @@ const EVENTS = [
   },
   {
     key: "bt-douro",
-    circle: "bica-table",
+    community: "bica-table",
     slug: "the-douro-table",
     title: "The Douro Table",
     summary: "The table leaves Lisbon for one night, on a terrace above the river at Vale Meão.",
@@ -815,7 +817,7 @@ const EVENTS = [
   },
   {
     key: "bt-sardine",
-    circle: "bica-table",
+    community: "bica-table",
     slug: "sardine-season-one-night",
     title: "Sardine Season, One Night",
     summary: "The grill goes out into the street for one night, when the fish are fat enough.",
@@ -837,13 +839,13 @@ const EVENTS = [
   // --- The Sunrise Court: three published. The first has one place left ---
   {
     key: "sc-doubles",
-    circle: "sunrise-court",
+    community: "sunrise-court",
     slug: "0540-doubles",
     title: "05:40 Doubles",
     summary: "Two courts, drawn pairings, matches to eleven, and breakfast at the club by eight.",
     description:
       "The standing morning session, played seriously and without anybody being difficult about a line call. " +
-      "Pairings are drawn at the net rather than chosen, so the whole circle plays together. " +
+      "Pairings are drawn at the net rather than chosen, so the whole community plays together. " +
       "Eight players, and the gate at Jumeirah is locked at twenty to six exactly.",
     venue: "Jumeirah Padel Club, Court 3",
     city: "Dubai",
@@ -857,7 +859,7 @@ const EVENTS = [
   },
   {
     key: "sc-desert-ladder",
-    circle: "sunrise-court",
+    community: "sunrise-court",
     slug: "the-desert-ladder",
     title: "The Desert Ladder",
     summary: "Six courts on open sand at Al Marmoom, a full ladder, and shade tents by nine.",
@@ -877,7 +879,7 @@ const EVENTS = [
   },
   {
     key: "sc-night-courts",
-    circle: "sunrise-court",
+    community: "sunrise-court",
     slug: "night-courts-al-quoz",
     title: "Night Courts, Al Quoz",
     summary: "The one evening session of the season, under lights, for people who cannot do mornings.",
@@ -895,10 +897,10 @@ const EVENTS = [
     attendees: ["nadia", "youssef", "ravi", "tobias", "marcus"],
   },
 
-  // --- Nightform: three published, and the circle is private ---
+  // --- Nightform: three published, and the community is private ---
   {
     key: "nf-talat-noi",
-    circle: "nightform",
+    community: "nightform",
     slug: "studio-visit-talat-noi",
     title: "Studio Visit: Talat Noi",
     summary: "Ten people up three flights to a working studio, and work nobody outside has seen.",
@@ -918,10 +920,10 @@ const EVENTS = [
   },
   {
     key: "nf-warehouse-hang",
-    circle: "nightform",
+    community: "nightform",
     slug: "the-warehouse-hang",
     title: "The Warehouse Hang",
-    summary: "One night a year the circle hangs work of its own, off Charoen Krung.",
+    summary: "One night a year the community hangs work of its own, off Charoen Krung.",
     description:
       "Members bring one piece each, made or bought or borrowed, and we hang the lot together. " +
       "No labels and no attributions until eleven, at which point everybody argues about who made what. " +
@@ -938,7 +940,7 @@ const EVENTS = [
   },
   {
     key: "nf-kiln-night",
-    circle: "nightform",
+    community: "nightform",
     slug: "kiln-night-in-nonthaburi",
     title: "Kiln Night in Nonthaburi",
     summary: "A wood kiln opened after four days upriver, with everything still too hot to hold.",
@@ -962,9 +964,9 @@ const eventId = (key) => uid(`event:${key}`);
 // ---------------------------------------------------------------------------
 // Memberships
 //
-// The host row is added automatically for each circle, so these are everybody
+// The host row is added automatically for each community, so these are everybody
 // else. Approved counts land on 15, 5, 9, 11, 9 and 7 — none of them a round
-// number, and each one is exactly what the circle page will count.
+// number, and each one is exactly what the community page will count.
 // ---------------------------------------------------------------------------
 
 const MEMBERSHIPS = {
@@ -1023,16 +1025,16 @@ const MEMBERSHIPS = {
 };
 
 /**
- * Passes bought with credits still on them. Everything else is derived from the
+ * Packages bought with tickets still on them. Everything else is derived from the
  * bookings, so these are the rows that create the states a booking cannot: a
- * member holding credits, and a member holding a credit for a gathering that is
+ * member holding tickets, and a member holding a ticket for an event that is
  * already full.
  */
-const SPARE_CREDITS = [
-  // Alexandra keeps two credits on Cap Ferrat after the shakedown sail.
-  { user: "alexandra", circle: "cap-ferrat", tier: "Trio" },
-  // And one unspent credit at the Bica Table, whose next dinner is sold out.
-  { user: "alexandra", circle: "bica-table", tier: "Single" },
+const SPARE_TICKETS = [
+  // Alexandra keeps two tickets on Cap Ferrat after the shakedown sail.
+  { user: "alexandra", community: "cap-ferrat", tier: "Trio" },
+  // And one unspent ticket at the Bica Table, whose next dinner is sold out.
+  { user: "alexandra", community: "bica-table", tier: "Single" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1041,7 +1043,7 @@ const SPARE_CREDITS = [
 // There is no photography for this product and none can be obtained, so every
 // row below has `object_key = null` and the page draws a generated plate from
 // `seed`. The caption is doing the work the picture would have done, which is
-// why each one names a place or a time and belongs to exactly one circle.
+// why each one names a place or a time and belongs to exactly one community.
 //
 // Dropping real files into `design/assets/` and writing their keys into
 // `object_key` swaps plates for pictures with no code change (see the column
@@ -1055,7 +1057,7 @@ const SPARE_CREDITS = [
 // the deploy pipeline. Setting `object_key` makes the UI render an <img> instead
 // of a generated plate — the swap the schema was built for.
 //
-// One group per circle, six files each, reused across that circle's gatherings.
+// One group per community, six files each, reused across that community's events.
 // A sailing club's evenings all look like sailing, so reuse reads as consistency
 // rather than as a shortage.
 const PHOTO_GROUP = {
@@ -1069,14 +1071,14 @@ const PHOTO_GROUP = {
 const PHOTOS_PER_GROUP = 6;
 
 /** `photos/cold-aspen/03.jpg` — the key the /assets/* route serves. */
-function photoKey(circleKey, index) {
-  const group = PHOTO_GROUP[circleKey];
-  if (!group) throw new Error(`no photo group for circle "${circleKey}"`);
+function photoKey(communityKey, index) {
+  const group = PHOTO_GROUP[communityKey];
+  if (!group) throw new Error(`no photo group for community "${communityKey}"`);
   const n = (((index % PHOTOS_PER_GROUP) + PHOTOS_PER_GROUP) % PHOTOS_PER_GROUP) + 1;
   return `photos/${group}/${String(n).padStart(2, "0")}.jpg`;
 }
 
-const CIRCLE_PHOTOS = {
+const COMMUNITY_PHOTOS = {
   "cap-ferrat": [
     "Pontoon C at Port Hercule, 07:15",
     "Nine hulls with the winter covers off",
@@ -1279,7 +1281,7 @@ const wordsIn = (sentence) => sentence.split(/\s+/).filter(Boolean).length;
 
 function buildRows() {
   const userByKey = new Map(USERS.map((u) => [u.key, u]));
-  const circleByKey = new Map(CIRCLES.map((c) => [c.key, c]));
+  const communityByKey = new Map(COMMUNITIES.map((c) => [c.key, c]));
   const tierByName = new Map(PACKAGE_TIERS.map((t) => [t.name, t]));
   const problems = [];
 
@@ -1295,10 +1297,10 @@ function buildRows() {
     created_at: daysAgo(u.joined),
   }));
 
-  // --- circles and their prices -------------------------------------------
+  // --- communities and their prices -------------------------------------------
 
-  const circles = CIRCLES.map((c) => ({
-    id: circleId(c.key),
+  const communities = COMMUNITIES.map((c) => ({
+    id: communityId(c.key),
     slug: c.slug,
     name: c.name,
     tagline: c.tagline,
@@ -1308,17 +1310,18 @@ function buildRows() {
     category: c.category,
     host_user_id: userId(c.host),
     is_private: c.isPrivate,
-    // The first frame of this circle's photo group is its cover.
+    // The first frame of this community's photo group is its cover.
     cover_key: photoKey(c.key, 0),
     created_at: daysAgo(c.founded),
   }));
 
-  const packages = CIRCLES.flatMap((c) =>
+  const packages = COMMUNITIES.flatMap((c) =>
     PACKAGE_TIERS.map((tier) => ({
       id: packageId(c.key, tier.name),
-      circle_id: circleId(c.key),
+      circle_id: communityId(c.key),
       name: tier.name,
-      credits: tier.credits,
+      // SQL column, unchanged by the rename — see src/schema.ts.
+      credits: tier.tickets,
       price_cents: c.prices[tier.sortOrder],
       currency: c.currency,
       active: true,
@@ -1329,20 +1332,20 @@ function buildRows() {
 
   // --- memberships ---------------------------------------------------------
 
-  /** Nobody joins a circle before it existed, or before they did. */
-  function joinedDaysAgo(circleKey, userKey) {
-    const ceiling = Math.min(circleByKey.get(circleKey).founded, userByKey.get(userKey).joined);
+  /** Nobody joins a community before it existed, or before they did. */
+  function joinedDaysAgo(communityKey, userKey) {
+    const ceiling = Math.min(communityByKey.get(communityKey).founded, userByKey.get(userKey).joined);
     const span = Math.max(1, ceiling - 4);
-    return 2 + (hashInt(`joined:${circleKey}:${userKey}`) % span);
+    return 2 + (hashInt(`joined:${communityKey}:${userKey}`) % span);
   }
 
   const approvedPairs = new Set();
-  const circleMembers = [];
+  const communityMembers = [];
 
-  for (const c of CIRCLES) {
-    circleMembers.push({
+  for (const c of COMMUNITIES) {
+    communityMembers.push({
       id: uid(`membership:${c.key}:${c.host}`),
-      circle_id: circleId(c.key),
+      circle_id: communityId(c.key),
       user_id: userId(c.host),
       role: "host",
       status: "approved",
@@ -1352,9 +1355,9 @@ function buildRows() {
 
     const roster = MEMBERSHIPS[c.key] ?? { approved: [], pending: [] };
     for (const key of roster.approved) {
-      circleMembers.push({
+      communityMembers.push({
         id: uid(`membership:${c.key}:${key}`),
-        circle_id: circleId(c.key),
+        circle_id: communityId(c.key),
         user_id: userId(key),
         role: "member",
         status: "approved",
@@ -1363,9 +1366,9 @@ function buildRows() {
       approvedPairs.add(`${c.key}:${key}`);
     }
     for (const key of roster.pending) {
-      circleMembers.push({
+      communityMembers.push({
         id: uid(`membership:${c.key}:${key}`),
-        circle_id: circleId(c.key),
+        circle_id: communityId(c.key),
         user_id: userId(key),
         role: "member",
         status: "pending",
@@ -1375,15 +1378,15 @@ function buildRows() {
     }
   }
 
-  // --- gatherings ----------------------------------------------------------
+  // --- events ----------------------------------------------------------
 
   const events = EVENTS.map((e) => ({
-    // Borrowed from the circle's group. Indexed by POSITION within the circle,
-    // not by hash: hashing collided and Cap Ferrat's six gatherings shared only
+    // Borrowed from the community's group. Indexed by POSITION within the community,
+    // not by hash: hashing collided and Cap Ferrat's six events shared only
     // three covers, which reads as a bug in a card grid.
-    cover_key: photoKey(e.circle, 1 + EVENTS.filter((x) => x.circle === e.circle).findIndex((x) => x.key === e.key)),
+    cover_key: photoKey(e.community, 1 + EVENTS.filter((x) => x.community === e.community).findIndex((x) => x.key === e.key)),
     id: eventId(e.key),
-    circle_id: circleId(e.circle),
+    circle_id: communityId(e.community),
     slug: e.slug,
     title: e.title,
     summary: e.summary,
@@ -1399,23 +1402,23 @@ function buildRows() {
 
   // --- photographs, of which there are none --------------------------------
 
-  /** Which circle a gathering belongs to, so it can borrow that circle's photos. */
-  const eventCircleKey = (key) => {
+  /** Which community an event belongs to, so it can borrow that community's photos. */
+  const eventCommunityKey = (key) => {
     const found = EVENTS.find((e) => e.key === key);
-    if (!found) throw new Error(`unknown gathering "${key}"`);
-    return found.circle;
+    if (!found) throw new Error(`unknown event "${key}"`);
+    return found.community;
   };
 
   const photos = [];
-  for (const [circleKey, captions] of Object.entries(CIRCLE_PHOTOS)) {
+  for (const [communityKey, captions] of Object.entries(COMMUNITY_PHOTOS)) {
     captions.forEach((caption, i) => {
       photos.push({
-        id: uid(`photo:circle:${circleKey}:${i}`),
-        circle_id: circleId(circleKey),
+        id: uid(`photo:circle:${communityKey}:${i}`),
+        circle_id: communityId(communityKey),
         event_id: null,
         caption,
-        seed: `${circleKey}-${String(i + 1).padStart(2, "0")}`,
-        object_key: photoKey(circleKey, i),
+        seed: `${communityKey}-${String(i + 1).padStart(2, "0")}`,
+        object_key: photoKey(communityKey, i),
         sort_order: i,
         created_at: daysAgo(30 + i),
       });
@@ -1429,29 +1432,29 @@ function buildRows() {
         event_id: eventId(eventKey),
         caption,
         seed: `${eventKey}-${String(i + 1).padStart(2, "0")}`,
-        object_key: photoKey(eventCircleKey(eventKey), hashInt(`photo:${eventKey}`) + i),
+        object_key: photoKey(eventCommunityKey(eventKey), hashInt(`photo:${eventKey}`) + i),
         sort_order: i,
         created_at: daysAgo(15 + i),
       });
     });
   }
 
-  // --- passes derived from the bookings that spend them --------------------
+  // --- packages derived from the bookings that spend them --------------------
   //
-  // Count what each member booked in each circle first, then buy them a pass
+  // Count what each member booked in each community first, then buy them a package
   // big enough to cover it. That way `credits_used` cannot drift away from the
   // bookings: it IS the number of bookings.
 
   const bookingsByPair = new Map();
   for (const e of EVENTS) {
     for (const key of e.attendees) {
-      const pair = `${e.circle}:${key}`;
+      const pair = `${e.community}:${key}`;
       if (!bookingsByPair.has(pair)) bookingsByPair.set(pair, []);
       bookingsByPair.get(pair).push(e);
     }
   }
 
-  const spareByPair = new Map(SPARE_CREDITS.map((s) => [`${s.circle}:${s.user}`, s.tier]));
+  const spareByPair = new Map(SPARE_TICKETS.map((s) => [`${s.community}:${s.user}`, s.tier]));
 
   /** Smallest tier that covers `n`, bumped a size for roughly a third of buyers. */
   function tierFor(pair, n) {
@@ -1465,40 +1468,41 @@ function buildRows() {
 
   const pairs = new Set([...bookingsByPair.keys(), ...spareByPair.keys()]);
   const orders = [];
-  const passes = [];
-  const passIdByPair = new Map();
+  const memberPackages = [];
+  const memberPackageIdByPair = new Map();
   const references = new Set();
 
   for (const pair of [...pairs].sort()) {
-    const [circleKey, userKey] = pair.split(":");
-    const circle = circleByKey.get(circleKey);
+    const [communityKey, userKey] = pair.split(":");
+    const community = communityByKey.get(communityKey);
     const booked = bookingsByPair.get(pair) ?? [];
     const tier = tierFor(pair, booked.length);
-    const joined = joinedDaysAgo(circleKey, userKey);
+    const joined = joinedDaysAgo(communityKey, userKey);
     const bought = 1 + (hashInt(`bought:${pair}`) % Math.max(1, joined - 2));
 
     orders.push({
       id: uid(`order:${pair}`),
       user_id: userId(userKey),
-      circle_id: circleId(circleKey),
-      package_id: packageId(circleKey, tier.name),
+      circle_id: communityId(communityKey),
+      package_id: packageId(communityKey, tier.name),
       reference: distinctCode(references, `order:${pair}`, 6, (c) => `2CC-${c}`),
-      credits: tier.credits,
-      amount_cents: circle.prices[tier.sortOrder],
-      currency: circle.currency,
+      // SQL column, unchanged by the rename — see src/schema.ts.
+      credits: tier.tickets,
+      amount_cents: community.prices[tier.sortOrder],
+      currency: community.currency,
       status: "paid",
       created_at: daysAgo(bought),
     });
-    passes.push({
+    memberPackages.push({
       id: uid(`pass:${pair}`),
       user_id: userId(userKey),
-      circle_id: circleId(circleKey),
+      circle_id: communityId(communityKey),
       order_id: uid(`order:${pair}`),
-      credits_total: tier.credits,
+      credits_total: tier.tickets,
       credits_used: booked.length,
       created_at: daysAgo(bought),
     });
-    passIdByPair.set(pair, { id: uid(`pass:${pair}`), bought, tier });
+    memberPackageIdByPair.set(pair, { id: uid(`pass:${pair}`), bought, tier });
   }
 
   // --- bookings ------------------------------------------------------------
@@ -1507,16 +1511,16 @@ function buildRows() {
   const ticketCodes = new Set();
   for (const e of EVENTS) {
     for (const key of e.attendees) {
-      const pair = `${e.circle}:${key}`;
-      const pass = passIdByPair.get(pair);
+      const pair = `${e.community}:${key}`;
+      const held = memberPackageIdByPair.get(pair);
       bookings.push({
         id: uid(`booking:${e.key}:${key}`),
         event_id: eventId(e.key),
         user_id: userId(key),
-        pass_id: pass.id,
+        pass_id: held.id,
         code: distinctCode(ticketCodes, `booking:${e.key}:${key}`, 4, (c) => `2CC-TKT-${c}`),
         status: "confirmed",
-        created_at: daysAgo(1 + (hashInt(`booked:${e.key}:${key}`) % Math.max(1, pass.bought))),
+        created_at: daysAgo(1 + (hashInt(`booked:${e.key}:${key}`) % Math.max(1, held.bought))),
       });
     }
   }
@@ -1526,7 +1530,7 @@ function buildRows() {
   // -------------------------------------------------------------------------
 
   // §6: two to four sentences, twelve to twenty words each.
-  for (const c of CIRCLES) {
+  for (const c of COMMUNITIES) {
     const parts = sentencesOf(c.description);
     if (parts.length < 2 || parts.length > 4) {
       problems.push(`${c.key}: description has ${parts.length} sentences, wanted 2 to 4`);
@@ -1548,11 +1552,11 @@ function buildRows() {
     if (n < 12 || n > 20) problems.push(`${e.key}: summary is ${n} words`);
   }
 
-  // Prices: the ladder falls per credit, and a Season is never six Singles.
-  for (const c of CIRCLES) {
-    const perCredit = PACKAGE_TIERS.map((t) => c.prices[t.sortOrder] / t.credits);
-    if (!(perCredit[0] > perCredit[1] && perCredit[1] > perCredit[2])) {
-      problems.push(`${c.key}: price per credit does not fall across the three passes`);
+  // Prices: the ladder falls per ticket, and a Season is never six Singles.
+  for (const c of COMMUNITIES) {
+    const perTicket = PACKAGE_TIERS.map((t) => c.prices[t.sortOrder] / t.tickets);
+    if (!(perTicket[0] > perTicket[1] && perTicket[1] > perTicket[2])) {
+      problems.push(`${c.key}: price per ticket does not fall across the three packages`);
     }
     if (c.prices[2] === c.prices[0] * 6) problems.push(`${c.key}: the Season is exactly six Singles`);
     for (const p of c.prices) {
@@ -1560,7 +1564,7 @@ function buildRows() {
     }
   }
 
-  // Gatherings: in the future, never on the hour, never over capacity, and
+  // Events: in the future, never on the hour, never over capacity, and
   // every attendee an approved member.
   for (const e of EVENTS) {
     const starts = at(e.day, e.start[0], e.start[1]);
@@ -1570,10 +1574,10 @@ function buildRows() {
     if (e.start[1] === 0) problems.push(`${e.key}: starts on the hour`);
     if (e.attendees.length > e.capacity) problems.push(`${e.key}: more attendees than places`);
     if (e.status !== "published" && e.attendees.length > 0) {
-      problems.push(`${e.key}: an unpublished gathering cannot have attendees`);
+      problems.push(`${e.key}: an unpublished event cannot have attendees`);
     }
     for (const key of e.attendees) {
-      if (!approvedPairs.has(`${e.circle}:${key}`)) {
+      if (!approvedPairs.has(`${e.community}:${key}`)) {
         problems.push(`${e.key}: ${key} is booked but is not an approved member`);
       }
     }
@@ -1582,10 +1586,10 @@ function buildRows() {
     }
   }
 
-  // Passes: credits left is never negative, and used always equals the bookings.
-  for (const p of passes) {
+  // Packages: tickets left is never negative, and used always equals the bookings.
+  for (const p of memberPackages) {
     if (p.credits_used > p.credits_total) {
-      problems.push(`pass ${p.id}: ${p.credits_used} credits spent out of ${p.credits_total}`);
+      problems.push(`package ${p.id}: ${p.credits_used} tickets spent out of ${p.credits_total}`);
     }
   }
 
@@ -1594,27 +1598,27 @@ function buildRows() {
   const oneLeft = EVENTS.filter(
     (e) => e.status === "published" && e.capacity - e.attendees.length === 1,
   );
-  const empty = CIRCLES.filter(
-    (c) => !EVENTS.some((e) => e.circle === c.key && e.status === "published"),
+  const empty = COMMUNITIES.filter(
+    (c) => !EVENTS.some((e) => e.community === c.key && e.status === "published"),
   );
-  const privateWithPending = CIRCLES.filter(
+  const privateWithPending = COMMUNITIES.filter(
     (c) => c.isPrivate && (MEMBERSHIPS[c.key]?.pending.length ?? 0) > 0,
   );
-  if (full.length !== 1) problems.push(`wanted exactly one sold-out gathering, found ${full.length}`);
+  if (full.length !== 1) problems.push(`wanted exactly one sold-out event, found ${full.length}`);
   if (oneLeft.length !== 1) {
-    problems.push(`wanted exactly one gathering with a single place, found ${oneLeft.length}`);
+    problems.push(`wanted exactly one event with a single place, found ${oneLeft.length}`);
   }
   if (empty.length !== 1) {
-    problems.push(`wanted exactly one circle with nothing upcoming, found ${empty.length}`);
+    problems.push(`wanted exactly one community with nothing upcoming, found ${empty.length}`);
   }
   if (privateWithPending.length !== 1) {
-    problems.push(`wanted exactly one private circle with requests, found ${privateWithPending.length}`);
+    problems.push(`wanted exactly one private community with requests, found ${privateWithPending.length}`);
   }
 
-  // Gathering counts, and the dates §8 names.
-  for (const c of CIRCLES) {
-    const n = EVENTS.filter((e) => e.circle === c.key).length;
-    if (n < 2 || n > 6) problems.push(`${c.key}: has ${n} gatherings, wanted between 2 and 6`);
+  // Event counts, and the dates §8 names.
+  for (const c of COMMUNITIES) {
+    const n = EVENTS.filter((e) => e.community === c.key).length;
+    if (n < 2 || n > 6) problems.push(`${c.key}: has ${n} events, wanted between 2 and 6`);
   }
   if (!EVENTS.some((e) => e.day === 1)) problems.push("nothing is happening tomorrow");
   if (!EVENTS.some((e) => e.day === WEEKEND)) problems.push("nothing is happening this weekend");
@@ -1625,12 +1629,12 @@ function buildRows() {
       return `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
     }),
   );
-  if (months.size < 3) problems.push(`published gatherings only span ${months.size} months`);
+  if (months.size < 3) problems.push(`published events only span ${months.size} months`);
 
-  // Photographs: four to eight a circle, three to five a gathering, and each
+  // Photographs: four to eight a community, three to five an event, and each
   // row hangs off exactly one parent.
-  for (const c of CIRCLES) {
-    const n = (CIRCLE_PHOTOS[c.key] ?? []).length;
+  for (const c of COMMUNITIES) {
+    const n = (COMMUNITY_PHOTOS[c.key] ?? []).length;
     if (n < 4 || n > 8) problems.push(`${c.key}: has ${n} frames, wanted between 4 and 8`);
   }
   for (const e of EVENTS) {
@@ -1639,7 +1643,7 @@ function buildRows() {
   }
   for (const p of photos) {
     if (Boolean(p.circle_id) === Boolean(p.event_id)) {
-      problems.push(`photo ${p.id}: belongs to both a circle and a gathering, or to neither`);
+      problems.push(`photo ${p.id}: belongs to both a community and an event, or to neither`);
     }
   }
   const captions = photos.map((p) => p.caption);
@@ -1654,7 +1658,17 @@ function buildRows() {
     throw new Error(`the seeded world is inconsistent:\n  - ${problems.join("\n  - ")}`);
   }
 
-  return { users, circles, packages, circleMembers, events, photos, orders, passes, bookings };
+  return {
+    users,
+    communities,
+    packages,
+    communityMembers,
+    events,
+    photos,
+    orders,
+    memberPackages,
+    bookings,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1680,13 +1694,13 @@ async function main() {
       await tx`delete from users`;
 
       await tx`insert into users ${tx(rows.users)}`;
-      await tx`insert into circles ${tx(rows.circles)}`;
-      await tx`insert into circle_members ${tx(rows.circleMembers)}`;
+      await tx`insert into circles ${tx(rows.communities)}`;
+      await tx`insert into circle_members ${tx(rows.communityMembers)}`;
       await tx`insert into packages ${tx(rows.packages)}`;
       await tx`insert into events ${tx(rows.events)}`;
       await tx`insert into photos ${tx(rows.photos)}`;
       await tx`insert into orders ${tx(rows.orders)}`;
-      await tx`insert into passes ${tx(rows.passes)}`;
+      await tx`insert into passes ${tx(rows.memberPackages)}`;
       await tx`insert into bookings ${tx(rows.bookings)}`;
     });
 

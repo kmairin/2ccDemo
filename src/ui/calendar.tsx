@@ -1,5 +1,5 @@
 /**
- * The two date-organised views of gatherings.
+ * The two date-organised views of events.
  *
  * `Ledger` is §5's list: not a card grid — an 88px mono date column, hairline
  * rows, a 64px square plate thumb and month group headers.
@@ -18,7 +18,7 @@ import { initials } from "./plate";
 export type LedgerEntry = {
   slug: string;
   title: string;
-  circleName: string;
+  communityName: string;
   venue: string;
   city: string;
   category?: string;
@@ -58,13 +58,13 @@ export function Ledger(props: { groups: LedgerGroup[] }) {
                 <span>{e.timeLabel}</span>
               </p>
               {/* The photograph, at 64px. Falling back to a plate, where the
-                  circle's monogram is what keeps a 64px square from reading as
+                  community's monogram is what keeps a 64px square from reading as
                   a failed thumbnail — with no subject all eight rows look
                   alike. */}
               <Plate
                 seed={e.slug}
                 category={e.category ?? ""}
-                monogram={initials(e.circleName)}
+                monogram={initials(e.communityName)}
                 rule={true}
                 shape="bare"
                 density="thumb"
@@ -77,7 +77,7 @@ export function Ledger(props: { groups: LedgerGroup[] }) {
                   <a href={`/events/${e.slug}`}>{e.title}</a>
                 </h3>
                 <p class="meta">
-                  {e.circleName} · {e.venue}, {e.city}
+                  {e.communityName} · {e.venue}, {e.city}
                 </p>
               </div>
               <div class="ledger-foot">
@@ -111,7 +111,7 @@ export type CalendarDay = {
   /** False for the leading and trailing days borrowed from adjacent months. */
   inMonth: boolean;
   isToday: boolean;
-  /** Published gatherings only. */
+  /** Published events only. */
   entries: CalendarEntry[];
 };
 
@@ -195,7 +195,7 @@ export function CalendarMonth(props: CalendarMonthProps) {
 
       <div class="cal-list">
         {listDays.length === 0 ? (
-          <p class="cal-empty">No gatherings this month.</p>
+          <p class="cal-empty">No events this month.</p>
         ) : (
           listDays.map((d) => (
             <div class={d.isToday ? "cal-day-row is-today" : "cal-day-row"}>

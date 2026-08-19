@@ -26,6 +26,45 @@ describe("unknown routes", () => {
   });
 });
 
+describe("the old vocabulary's URLs", () => {
+  const cases: [string, string][] = [
+    ["/circles", "/communities"],
+    ["/circles?category=sailing", "/communities?category=sailing"],
+    ["/circles/the-cold-room", "/communities/the-cold-room"],
+    ["/circles/the-cold-room/passes/abc/checkout", "/communities/the-cold-room/packages/abc/checkout"],
+    [
+      "/circles/the-cold-room/passes/abc/checkout?next=/events/x",
+      "/communities/the-cold-room/packages/abc/checkout?next=/events/x",
+    ],
+    ["/host/circles", "/host/communities"],
+    ["/host/circles/the-cold-room", "/host/communities/the-cold-room"],
+    ["/host/circles/the-cold-room/packages", "/host/communities/the-cold-room/packages"],
+    ["/api/circles", "/api/communities"],
+    ["/api/circles/the-cold-room", "/api/communities/the-cold-room"],
+  ];
+
+  for (const [from, to] of cases) {
+    it(`301s GET ${from} to ${to}`, async () => {
+      const res = await app.request(from);
+      expect(res.status).toBe(301);
+      expect(res.headers.get("location")).toBe(to);
+    });
+  }
+
+  // A 301 or 302 would turn this into a GET and drop the body, which is the
+  // whole reason the non-GET case is a 308.
+  it("308s a POST so the method survives", async () => {
+    const res = await app.request("/circles/the-cold-room/join", { method: "POST" });
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("/communities/the-cold-room/join");
+  });
+
+  it("leaves a path that was never renamed alone", async () => {
+    const res = await app.request("/definitely-not-a-route");
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("GET /assets/*", () => {
   it("404s when the object is not in the bucket", async () => {
     const res = await app.request("/assets/missing.png", {}, { BUCKET: { get: async () => null } });

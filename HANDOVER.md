@@ -1,7 +1,7 @@
 # 2CC — what was built, and how to run it
 
-An invitation-only events platform. Communities ("circles") run gatherings;
-members buy passes of 1, 3 or 6 credits and spend one credit per place. Front end
+A global, open community and events platform. Communities run events;
+members buy packages of 1, 3 or 6 tickets and spend one ticket per place. Front end
 and back end, on this repo's own stack — Hono + Drizzle/Postgres on SV Cloud.
 It runs locally; nothing has been pushed or deployed.
 
@@ -15,12 +15,12 @@ npm run seed
 npm run dev                            # http://localhost:8787
 ```
 
-Sign in with **`member@2cc.club`** (Alexandra Voss — holds passes, bookings and a
-pending request) or **`host@2cc.club`** (Rafael Ortiz — hosts two circles). No
+Sign in with **`member@2cc.club`** (Alexandra Voss — holds packages, bookings and a
+pending request) or **`host@2cc.club`** (Rafael Ortiz — hosts two communities). No
 password: the sign-in is email + name by design.
 
 ```bash
-npm test        # 112 tests
+npm test        # 195 tests
 npm run e2e     # 59 checks against the running server
 ```
 
@@ -37,13 +37,13 @@ ALTER DATABASE loop_dev OWNER TO postgres;
 
 ## The walk-through
 
-Landing → a gathering → sign in → buy a pass → confirm → booked, in **6 clicks**
-(measured, ceiling was 7). A returning member holding a credit: **2 clicks**.
+Landing → an event → sign in → buy a package → confirm → booked, in **6 clicks**
+(measured, ceiling was 7). A returning member holding a ticket: **2 clicks**.
 
-- `/` · `/circles` · `/circles/:slug` · `/events` · `/calendar` · `/join`
-- `/account` — credits as hairline squares, a credit ledger, tickets
+- `/` · `/communities` · `/communities/:slug` · `/events` · `/calendar` · `/join`
+- `/account` — tickets as hairline squares, a ticket ledger, the places you hold
 - `/account/tickets/:code` — the ticket, as an issued object
-- `/host` and `/host/circles/:slug` — publish gatherings, price passes, approve members
+- `/host` and `/host/communities/:slug` — publish events, price packages, approve members
 
 Payment is mocked: the checkout shows a disabled card block ending `4242` and a
 visible `DEMO — no card is charged` note. An order is recorded; no processor.
@@ -53,7 +53,7 @@ visible `DEMO — no card is charged` note. An order is recorded; no processor.
 There is no photography for this product and none could be obtained. A four-person
 design council was convened; two members independently rejected generated
 gradients and landed on the same answer — **engraved printing**. Every cover is
-"a plate": a lit-black ground, a per-category wash, the circle's initials
+"a plate": a lit-black ground, a per-category wash, the community's initials
 debossed, and a parametric guilloché engraving derived from the slug. Six side by
 side read as a deliberate series rather than six broken images.
 

@@ -1,7 +1,7 @@
 /**
  * The photo strip (`design/reference/api-contract.md`, Scope addition §A).
  *
- * A strip of the circle's or the gathering's photographs, captioned. A record
+ * A strip of the community's or the event's photographs, captioned. A record
  * whose photo has no `objectKey` falls back to a generated plate in the same
  * frame, so a partly-photographed strip still reads as one set.
  *
@@ -15,7 +15,7 @@ import { Plate } from "./components";
 export type GalleryItem = {
   /** `"The pump house, 06:30"`. Does the work a photograph would. */
   caption: string;
-  /** Drives this item's own guilloché parameters — one per photo, not one per circle. */
+  /** Drives this item's own guilloché parameters — one per photo, not one per community. */
   seed: string;
   /**
    * An R2 key. Set (the normal case) renders `<img src="/assets/…">`; null
@@ -27,7 +27,7 @@ export type GalleryItem = {
 export type GalleryProps = {
   /** Names the region for screen readers, e.g. "The Cold Room, photographs". */
   label: string;
-  /** Picks the wash, so a circle's strip reads as one set. */
+  /** Picks the wash, so a community's strip reads as one set. */
   category?: string;
   items: GalleryItem[];
 };

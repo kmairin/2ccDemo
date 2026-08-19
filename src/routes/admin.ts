@@ -13,7 +13,7 @@
  *      With no token configured the route answers 404 like any unknown path —
  *      it does not advertise itself.
  *   2. The token must be at least 24 characters, so a guessable one cannot arm it.
- *   3. It refuses to run against a database that already holds circles, unless
+ *   3. It refuses to run against a database that already holds communities, unless
  *      `?force=1` is passed deliberately.
  *   4. It is POST only, and the token never appears in a URL or a log line.
  *
@@ -69,7 +69,7 @@ admin.post("/bootstrap", async (c) => {
       ? Number(first[0] ?? 0)
       : Number((first as { n?: number } | undefined)?.n ?? 0);
   } catch {
-    // No `circles` table yet — the expected state on a first run.
+    // No `communities` table yet — the expected state on a first run.
     existing = 0;
   }
 
@@ -77,8 +77,8 @@ admin.post("/bootstrap", async (c) => {
     return c.json(
       {
         status: "already_populated",
-        circles: existing,
-        hint: "Pass ?force=1 to run anyway. It will error on objects that already exist.",
+        communities: existing,
+        hint: "Add `?force=1` to run anyway. It will error on objects that already exist.",
       },
       409,
     );

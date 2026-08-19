@@ -46,8 +46,8 @@ interface SearchBody {
   query: string;
   communities: { slug: string; city: string; country: string }[];
   events: { slug: string; city: string }[];
-  countries: { country: string; circleCount: number; eventCount: number }[];
-  cities: { city: string; country: string; circleCount: number; eventCount: number }[];
+  countries: { country: string; communityCount: number; eventCount: number }[];
+  cities: { city: string; country: string; communityCount: number; eventCount: number }[];
 }
 
 async function json<T>(path: string): Promise<{ status: number; body: T }> {
@@ -82,7 +82,7 @@ const SLOW = 20_000;
  * database to prove the deployed bootstrap resumes, and vitest runs files in
  * parallel — so a snapshot taken at import time can describe a world that no
  * longer exists by the time an assertion reads it. Measured: a city held 10
- * gatherings when this file loaded and 3 when the page was rendered. Every
+ * events when this file loaded and 3 when the page was rendered. Every
  * expectation below is still built from the rows and never from a list of
  * city names typed in here, which is the same rule the routes follow.
  */
@@ -94,21 +94,21 @@ interface Place {
 }
 
 /** Cities with a community based in them, and how many. */
-function circleCities(): Promise<Place[]> {
+function communityCities(): Promise<Place[]> {
   return sql<Place[]>`
     select city, country, count(*)::int as n from circles group by city, country order by city
   `;
 }
 
 /**
- * Cities with a published gathering still to come, and how many.
+ * Cities with a published event still to come, and how many.
  *
- * The join to `circles` is load-bearing, not decoration. This local database
- * has **no foreign key from `events` to `circles`** (the bootstrap in
- * `src/ensure-schema.ts` creates the table without one), so deleting a circle
- * orphans its gatherings instead of cascading them: measured, 7 rows left over
+ * The join to `communities` is load-bearing, not decoration. This local database
+ * has **no foreign key from `events` to `communities`** (the bootstrap in
+ * `src/ensure-schema.ts` creates the table without one), so deleting a community
+ * orphans its events instead of cascading them: measured, 7 rows left over
  * from earlier end-to-end runs. Every read path in the app inner-joins the
- * circle, so a count that does not is counting rows no page will ever show —
+ * community, so a count that does not is counting rows no page will ever show —
  * and it said 10 where the page correctly drew 3.
  */
 function eventCities(): Promise<{ city: string; n: number }[]> {
@@ -122,15 +122,15 @@ function eventCities(): Promise<{ city: string; n: number }[]> {
 
 interface Country {
   country: string;
-  circles: number;
+  communities: number;
   events: number;
 }
 
-/** Countries, with their communities and their upcoming gatherings. */
+/** Countries, with their communities and their upcoming events. */
 function allCountries(): Promise<Country[]> {
   return sql<Country[]>`
     select c.country,
-           count(distinct c.id)::int as circles,
+           count(distinct c.id)::int as communities,
            count(distinct e.id) filter (
              where e.status = 'published' and e.starts_at >= now()
            )::int as events
@@ -166,7 +166,7 @@ suite("GET /countries", () => {
     const countries = await allCountries();
     const { status, html } = await get("/countries");
     expect(status).toBe(200);
-    expect(countries.length, "no circles: run `npm run seed`").toBeGreaterThan(0);
+    expect(countries.length, "no communities: run `npm run seed`").toBeGreaterThan(0);
     for (const row of countries) {
       expect(html, `${row.country} is missing from the country index`).toContain(row.country);
       expect(html, `${row.country} has no link`).toContain(
@@ -179,7 +179,7 @@ suite("GET /countries", () => {
     /**
      * Read twice before failing.
      *
-     * `test/flows.test.ts` creates and deletes circles while this runs — vitest
+     * `test/flows.test.ts` creates and deletes communities while this runs — vitest
      * runs files in parallel — so a single disagreement between the page and
      * the database is evidence of a write in between, not of a miscount.
      * Measured: Portugal rendered 2 and SQL said 1, and the two agreed on the
@@ -194,7 +194,7 @@ suite("GET /countries", () => {
     const agree = (html: string, rows: Country[]): boolean =>
       rows.every((row) => {
         const counts = indexCounts(html, row.country);
-        return counts[0] === row.circles && counts[2] === row.events;
+        return counts[0] === row.communities && counts[2] === row.events;
       });
 
     let seen = await read();
@@ -202,9 +202,9 @@ suite("GET /countries", () => {
 
     for (const row of seen.rows) {
       const counts = indexCounts(seen.html, row.country);
-      expect(counts[0], `community count for ${row.country}`).toBe(row.circles);
+      expect(counts[0], `community count for ${row.country}`).toBe(row.communities);
       expect(counts[1], `city count for ${row.country}`).toBeGreaterThan(0);
-      expect(counts[2], `upcoming gathering count for ${row.country}`).toBe(row.events);
+      expect(counts[2], `upcoming event count for ${row.country}`).toBe(row.events);
     }
   });
 });
@@ -220,17 +220,17 @@ suite("GET /countries/:country", () => {
       const mine = await sql<{ slug: string }[]>`
         select slug from circles where country = ${row.country}
       `;
-      for (const circle of mine) {
-        expect(html, `${circle.slug} missing from ${row.country}`).toContain(
-          `/circles/${circle.slug}`,
+      for (const community of mine) {
+        expect(html, `${community.slug} missing from ${row.country}`).toContain(
+          `/communities/${community.slug}`,
         );
       }
       const theirs = await sql<{ slug: string }[]>`
         select slug from circles where country <> ${row.country}
       `;
-      for (const circle of theirs) {
-        expect(html, `${circle.slug} leaked onto ${row.country}`).not.toContain(
-          `/circles/${circle.slug}"`,
+      for (const community of theirs) {
+        expect(html, `${community.slug} leaked onto ${row.country}`).not.toContain(
+          `/communities/${community.slug}"`,
         );
       }
     }
@@ -248,7 +248,7 @@ suite("GET /countries/:country", () => {
     expect(status).toBe(404);
     expect(html).toContain("No such country");
     // A dead end is not an answer: the 404 offers a way on.
-    expect(html).toContain('href="/circles"');
+    expect(html).toContain('href="/communities"');
     expect(html).toContain('href="/events"');
   });
 });
@@ -257,7 +257,7 @@ suite("GET /countries/:country", () => {
 
 suite("GET /cities/:city", () => {
   it("answers what is on in each city the seed holds", async () => {
-    const cities = await circleCities();
+    const cities = await communityCities();
     for (const row of cities) {
       const { status, html } = await get(`/cities/${encodeURIComponent(row.city)}`);
       expect(status, `${row.city} should be a page`).toBe(200);
@@ -280,14 +280,14 @@ suite("GET /cities/:city", () => {
     }
   }, SLOW);
 
-  it("exists for a city that only has a gathering, not a community", async () => {
-    const [cities, dates] = await Promise.all([circleCities(), eventCities()]);
+  it("exists for a city that only has an event, not a community", async () => {
+    const [cities, dates] = await Promise.all([communityCities(), eventCities()]);
     const orphan = dates.find(
       (e) => !cities.some((c) => c.city.toLowerCase() === e.city.toLowerCase()),
     );
-    // The seed has one (a Monaco circle sailing out of Cap-d'Ail); if it ever
+    // The seed has one (a Monaco community sailing out of Cap-d'Ail); if it ever
     // stops having one, this is worth knowing rather than skipping silently.
-    expect(orphan, "seed no longer has a gathering in a city with no community").toBeDefined();
+    expect(orphan, "seed no longer has an event in a city with no community").toBeDefined();
     if (!orphan) return;
     const { status, html } = await get(`/cities/${encodeURIComponent(orphan.city)}`);
     expect(status).toBe(200);
@@ -296,7 +296,7 @@ suite("GET /cities/:city", () => {
   });
 
   it("is case-insensitive", async () => {
-    const cities = await circleCities();
+    const cities = await communityCities();
     const one = cities[0].city;
     const { status } = await get(`/cities/${encodeURIComponent(one.toUpperCase())}`);
     expect(status).toBe(200);
@@ -311,17 +311,17 @@ suite("GET /cities/:city", () => {
 
 /* ------------------------------------------------- the filters on the lists */
 
-suite("GET /circles?city= and ?country=", () => {
+suite("GET /communities?city= and ?country=", () => {
   it("filters to one city — counted before and after", async () => {
-    const before = await get("/circles");
-    const cities = await circleCities();
+    const before = await get("/communities");
+    const cities = await communityCities();
     const all = countOf(before.html, CARD);
-    expect(all, "no circles: run `npm run seed`").toBeGreaterThan(1);
+    expect(all, "no communities: run `npm run seed`").toBeGreaterThan(1);
 
     for (const row of cities) {
-      const after = await get(`/circles?city=${encodeURIComponent(row.city)}`);
+      const after = await get(`/communities?city=${encodeURIComponent(row.city)}`);
       expect(after.status).toBe(200);
-      expect(countOf(after.html, CARD), `circles in ${row.city}`).toBe(row.n);
+      expect(countOf(after.html, CARD), `communities in ${row.city}`).toBe(row.n);
       expect(row.n, `${row.city} should be a proper subset`).toBeLessThan(all);
     }
   }, SLOW);
@@ -329,8 +329,8 @@ suite("GET /circles?city= and ?country=", () => {
   it("filters to one country", async () => {
     const countries = await allCountries();
     for (const row of countries) {
-      const { html } = await get(`/circles?country=${encodeURIComponent(row.country)}`);
-      expect(countOf(html, CARD), `circles in ${row.country}`).toBe(row.circles);
+      const { html } = await get(`/communities?country=${encodeURIComponent(row.country)}`);
+      expect(countOf(html, CARD), `communities in ${row.country}`).toBe(row.communities);
     }
   }, SLOW);
 
@@ -340,7 +340,7 @@ suite("GET /circles?city= and ?country=", () => {
       from circles group by country, category order by n desc limit 1
     `;
     const { status, html } = await get(
-      `/circles?country=${encodeURIComponent(row.country)}&category=${row.category}`,
+      `/communities?country=${encodeURIComponent(row.country)}&category=${row.category}`,
     );
     expect(status).toBe(200);
     expect(countOf(html, CARD)).toBe(row.n);
@@ -354,7 +354,7 @@ suite("GET /circles?city= and ?country=", () => {
     `;
     if (missing) {
       const other = await get(
-        `/circles?country=${encodeURIComponent(row.country)}&category=${missing.category}`,
+        `/communities?country=${encodeURIComponent(row.country)}&category=${missing.category}`,
       );
       expect(other.status).toBe(200);
       expect(countOf(other.html, CARD)).toBe(0);
@@ -362,19 +362,19 @@ suite("GET /circles?city= and ?country=", () => {
   });
 
   it("shows an empty state with a way out for a city nothing answers to", async () => {
-    const { status, html } = await get("/circles?city=Atlantis");
+    const { status, html } = await get("/communities?city=Atlantis");
     // Not a 404: an unknown place is an empty result, not a broken URL.
     expect(status).toBe(200);
-    expect(html).toContain(esc("No circles in Atlantis yet."));
+    expect(html).toContain(esc("No communities in Atlantis yet."));
     expect(html).toContain('href="/countries"');
   });
 
   it("carries a city row built from the data, with counts that match it", async () => {
-    const cities = await circleCities();
-    const { html } = await get("/circles");
+    const cities = await communityCities();
+    const { html } = await get("/communities");
     for (const row of cities) {
       expect(html, `${row.city} is missing from the city row`).toContain(
-        `/circles?city=${encodeURIComponent(row.city).replace(/%20/g, "+")}`,
+        `/communities?city=${encodeURIComponent(row.city).replace(/%20/g, "+")}`,
       );
     }
     // The row is the hairline filter style, never pills (§5).
@@ -382,7 +382,7 @@ suite("GET /circles?city= and ?country=", () => {
   });
 
   it("puts a search field in the page body", async () => {
-    const { html } = await get("/circles");
+    const { html } = await get("/communities");
     expect(html).toContain('action="/search"');
     expect(html).toContain('name="q"');
   });
@@ -393,28 +393,28 @@ suite("GET /events?city= and ?country=", () => {
     const before = await get("/events");
     const dates = await eventCities();
     const all = countOf(before.html, LEDGER_ROW);
-    expect(all, "no gatherings: run `npm run seed`").toBeGreaterThan(1);
+    expect(all, "no events: run `npm run seed`").toBeGreaterThan(1);
 
     for (const row of dates) {
       const after = await get(`/events?city=${encodeURIComponent(row.city)}`);
       expect(after.status).toBe(200);
-      expect(countOf(after.html, LEDGER_ROW), `gatherings in ${row.city}`).toBe(row.n);
+      expect(countOf(after.html, LEDGER_ROW), `events in ${row.city}`).toBe(row.n);
       expect(row.n).toBeLessThan(all);
     }
   }, SLOW);
 
-  it("filters to one country, counting the circle's country and not the venue's", async () => {
+  it("filters to one country, counting the community's country and not the venue's", async () => {
     const countries = await allCountries();
     for (const row of countries) {
       const { html } = await get(`/events?country=${encodeURIComponent(row.country)}`);
-      expect(countOf(html, LEDGER_ROW), `gatherings in ${row.country}`).toBe(row.events);
+      expect(countOf(html, LEDGER_ROW), `events in ${row.country}`).toBe(row.events);
     }
   }, SLOW);
 
   it("shows an empty state, not a 404, for a city with no dates", async () => {
     const { status, html } = await get("/events?city=Atlantis");
     expect(status).toBe(200);
-    expect(html).toContain(esc("No gatherings in Atlantis yet."));
+    expect(html).toContain(esc("No events in Atlantis yet."));
     expect(html).toContain('href="/countries"');
   });
 
@@ -448,39 +448,39 @@ suite("GET /search", () => {
   });
 
   it("finds a community by its name", async () => {
-    const [circle] = await sql<{ slug: string; name: string }[]>`
+    const [community] = await sql<{ slug: string; name: string }[]>`
       select slug, name from circles order by created_at limit 1
     `;
-    const { status, html } = await get(`/search?q=${encodeURIComponent(circle.name)}`);
+    const { status, html } = await get(`/search?q=${encodeURIComponent(community.name)}`);
     expect(status).toBe(200);
-    expect(html).toContain(`/circles/${circle.slug}`);
+    expect(html).toContain(`/communities/${community.slug}`);
   });
 
   it("finds a community by a word in its description, not just its name", async () => {
-    const [circle] = await sql<{ slug: string; description: string }[]>`
+    const [community] = await sql<{ slug: string; description: string }[]>`
       select slug, description from circles order by created_at limit 1
     `;
     // A word long enough not to appear in the name or the chrome.
-    const word = circle.description.match(/[A-Za-z]{8,}/)?.[0];
+    const word = community.description.match(/[A-Za-z]{8,}/)?.[0];
     expect(word, "no long word in the seeded description to search for").toBeTruthy();
     if (word === undefined) return;
     const { html } = await get(`/search?q=${encodeURIComponent(word)}`);
-    expect(html).toContain(`/circles/${circle.slug}`);
+    expect(html).toContain(`/communities/${community.slug}`);
   });
 
-  it("groups a city search into communities, gatherings, countries and cities", async () => {
-    const [cities, dates] = await Promise.all([circleCities(), eventCities()]);
+  it("groups a city search into communities, events, countries and cities", async () => {
+    const [cities, dates] = await Promise.all([communityCities(), eventCities()]);
     const city = dates.find((c) => c.n > 0)?.city ?? cities[0].city;
     const { status, html } = await get(`/search?q=${encodeURIComponent(city)}`);
     expect(status).toBe(200);
-    for (const group of ["Communities", "Gatherings", "Countries", "Cities"]) {
+    for (const group of ["Communities", "Events", "Countries", "Cities"]) {
       expect(html, `the ${group} group is missing`).toContain(group);
     }
     expect(html).toContain(`/cities/${encodeURIComponent(city)}`);
   });
 
   it("counts each group, and the count matches the rows under it", async () => {
-    const cities = await circleCities();
+    const cities = await communityCities();
     const city = cities[0].city;
     const { html } = await get(`/search?q=${encodeURIComponent(city)}`);
     const inCity = await sql<{ n: number }[]>`
@@ -504,12 +504,12 @@ suite("GET /search", () => {
       const { status, html } = await get(`/search?q=${encodeURIComponent(wildcard)}`);
       expect(status).toBe(200);
       expect(countOf(html, CARD), `"${wildcard}" matched communities`).toBe(0);
-      expect(countOf(html, LEDGER_ROW), `"${wildcard}" matched gatherings`).toBe(0);
+      expect(countOf(html, LEDGER_ROW), `"${wildcard}" matched events`).toBe(0);
     }
   });
 
   it("is case-insensitive", async () => {
-    const cities = await circleCities();
+    const cities = await communityCities();
     const city = cities[0].city;
     const lower = await get(`/search?q=${encodeURIComponent(city.toLowerCase())}`);
     const upper = await get(`/search?q=${encodeURIComponent(city.toUpperCase())}`);
@@ -520,33 +520,33 @@ suite("GET /search", () => {
 
 /* ------------------------------------------------------------------- JSON */
 
-suite("GET /api/circles with a place filter", () => {
+suite("GET /api/communities with a place filter", () => {
   it("filters by city and by country", async () => {
-    const [cities, countries] = await Promise.all([circleCities(), allCountries()]);
-    const all = await json<{ circles: { slug: string }[] }>("/api/circles");
+    const [cities, countries] = await Promise.all([communityCities(), allCountries()]);
+    const all = await json<{ communities: { slug: string }[] }>("/api/communities");
     for (const row of cities) {
-      const one = await json<{ circles: { city: string }[] }>(
-        `/api/circles?city=${encodeURIComponent(row.city)}`,
+      const one = await json<{ communities: { city: string }[] }>(
+        `/api/communities?city=${encodeURIComponent(row.city)}`,
       );
       expect(one.status).toBe(200);
-      expect(one.body.circles.length).toBe(row.n);
-      expect(one.body.circles.length).toBeLessThan(all.body.circles.length);
-      for (const circle of one.body.circles) {
-        expect(circle.city.toLowerCase()).toBe(row.city.toLowerCase());
+      expect(one.body.communities.length).toBe(row.n);
+      expect(one.body.communities.length).toBeLessThan(all.body.communities.length);
+      for (const community of one.body.communities) {
+        expect(community.city.toLowerCase()).toBe(row.city.toLowerCase());
       }
     }
     for (const row of countries) {
-      const one = await json<{ circles: { country: string }[] }>(
-        `/api/circles?country=${encodeURIComponent(row.country)}`,
+      const one = await json<{ communities: { country: string }[] }>(
+        `/api/communities?country=${encodeURIComponent(row.country)}`,
       );
-      expect(one.body.circles.length).toBe(row.circles);
+      expect(one.body.communities.length).toBe(row.communities);
     }
   }, SLOW);
 
   it("returns an empty list, not a 404, for a place nothing answers to", async () => {
-    const { status, body } = await json<{ circles: unknown[] }>("/api/circles?city=Atlantis");
+    const { status, body } = await json<{ communities: unknown[] }>("/api/communities?city=Atlantis");
     expect(status).toBe(200);
-    expect(body.circles).toEqual([]);
+    expect(body.communities).toEqual([]);
   });
 });
 
@@ -572,7 +572,7 @@ suite("GET /api/events with a place filter", () => {
     }
   }, SLOW);
 
-  it("filters by the country of the circle that runs it", async () => {
+  it("filters by the country of the community that runs it", async () => {
     const countries = await allCountries();
     for (const row of countries) {
       const { body } = await json<{ events: { slug: string }[] }>(
@@ -590,7 +590,7 @@ suite("GET /api/events with a place filter", () => {
 
 suite("GET /api/search", () => {
   it("returns the four groups under the contracted keys", async () => {
-    const cities = await circleCities();
+    const cities = await communityCities();
     const city = cities[0].city;
     const { status, body } = await json<SearchBody>(`/api/search?q=${encodeURIComponent(city)}`);
     expect(status).toBe(200);

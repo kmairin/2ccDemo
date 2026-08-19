@@ -1,14 +1,14 @@
 /**
- * Money and places: what a circle sells, buying it, spending a credit on a
- * gathering, and handing the credit back.
+ * Money and places: what a community sells, buying it, spending a ticket on a
+ * event, and handing the ticket back.
  *
  * The three mutations here each land as ONE `batch()` from `src/db.ts` — all of
  * it or none of it. `db.transaction()` throws on this platform (see that file),
- * and two separate awaits would leave a pass charged for a booking that never
+ * and two separate awaits would leave a package charged for a booking that never
  * existed.
  *
  * Every mutation returns a tagged result rather than throwing, because every
- * refusal in this file is a thing to tell the member — "you have no credits
+ * refusal in this file is a thing to tell the member — "you have no tickets
  * left" is a banner, not a 500.
  */
 import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
@@ -18,35 +18,35 @@ import { newId, orderReference, ticketCode } from "../lib/ids";
 import { createLogger, type LoggerEnv } from "../logger";
 import {
   bookings,
-  circleMembers,
-  circles,
+  communityMembers,
+  communities,
   events,
   orders,
   packages,
-  passes,
+  memberPackages,
 } from "../schema";
 import { boundLimit, confirmedBookingCount, placesLeft } from "./common";
 
 /** Commerce writes and logs, so it needs both halves of the environment. */
 export type CommerceEnv = DatabaseEnv & LoggerEnv;
 
-/** One of the three passes a circle sells. */
+/** One of the three packages a community sells. */
 export interface PackageOffer {
   id: string;
   name: string;
-  credits: number;
+  tickets: number;
   priceCents: number;
   currency: string;
 }
 
-/** A pass a member holds, with the circle it is good for. */
-export interface PassSummary {
+/** A package a member holds, with the community it is good for. */
+export interface MemberPackageSummary {
   id: string;
-  circleSlug: string;
-  circleName: string;
-  creditsTotal: number;
-  creditsUsed: number;
-  creditsLeft: number;
+  communitySlug: string;
+  communityName: string;
+  ticketsTotal: number;
+  ticketsUsed: number;
+  ticketsLeft: number;
 }
 
 /** A place a member holds, or held. */
@@ -56,12 +56,12 @@ export interface BookingSummary {
   eventTitle: string;
   startsAt: string;
   status: (typeof bookings.$inferSelect)["status"];
-  circleSlug: string;
-  circleName: string;
+  communitySlug: string;
+  communityName: string;
 }
 
-/** A circle this member runs, for `/host` and `/api/me`. */
-export interface HostedCircle {
+/** A community this member runs, for `/host` and `/api/me`. */
+export interface HostedCommunity {
   slug: string;
   name: string;
 }
@@ -71,25 +71,25 @@ export type PurchaseResult =
       status: "created";
       orderId: string;
       reference: string;
-      passId: string;
-      credits: number;
+      memberPackageId: string;
+      tickets: number;
       amountCents: number;
       currency: string;
       /** True when this purchase also made them an approved member. */
-      joinedCircle: boolean;
+      joinedCommunity: boolean;
     }
   | { status: "already_processed"; orderId: string; reference: string }
   | { status: "package_not_found" };
 
 export type BookResult =
-  | { status: "booked"; code: string; creditsLeft: number }
+  | { status: "booked"; code: string; ticketsLeft: number }
   | { status: "already_booked"; code: string }
   | { status: "event_not_found" }
   | { status: "not_published" }
   | { status: "not_a_member" }
   | { status: "membership_pending" }
   | { status: "full" }
-  | { status: "no_credits" };
+  | { status: "no_tickets" };
 
 export type CancelResult =
   | { status: "cancelled"; code: string }
@@ -97,10 +97,10 @@ export type CancelResult =
   | { status: "not_found" }
   | { status: "forbidden" };
 
-/** What a circle sells, in the order the design puts the cards. Active only. */
+/** What a community sells, in the order the design puts the cards. Active only. */
 export async function listPackages(
   env: DatabaseEnv,
-  circleId: string,
+  communityId: string,
   options: { limit?: number } = {},
 ): Promise<PackageOffer[]> {
   const db = getDb(env);
@@ -108,25 +108,25 @@ export async function listPackages(
     .select({
       id: packages.id,
       name: packages.name,
-      credits: packages.credits,
+      tickets: packages.tickets,
       priceCents: packages.priceCents,
       currency: packages.currency,
     })
     .from(packages)
-    .where(and(eq(packages.circleId, circleId), eq(packages.active, true)))
+    .where(and(eq(packages.communityId, communityId), eq(packages.active, true)))
     .orderBy(asc(packages.sortOrder), asc(packages.createdAt))
     .limit(boundLimit(options.limit));
   return rows.map((row) => ({
     ...row,
-    credits: Number(row.credits),
+    tickets: Number(row.tickets),
     priceCents: Number(row.priceCents),
   }));
 }
 
-/** One package, checked against the circle in the URL so the two cannot disagree. */
-export async function getPackageForCircle(
+/** One package, checked against the community in the URL so the two cannot disagree. */
+export async function getPackageForCommunity(
   env: DatabaseEnv,
-  circleId: string,
+  communityId: string,
   packageId: string,
 ): Promise<PackageOffer | null> {
   const db = getDb(env);
@@ -134,21 +134,21 @@ export async function getPackageForCircle(
     .select({
       id: packages.id,
       name: packages.name,
-      credits: packages.credits,
+      tickets: packages.tickets,
       priceCents: packages.priceCents,
       currency: packages.currency,
     })
     .from(packages)
     .where(
-      and(eq(packages.id, packageId), eq(packages.circleId, circleId), eq(packages.active, true)),
+      and(eq(packages.id, packageId), eq(packages.communityId, communityId), eq(packages.active, true)),
     )
     .limit(1);
   if (!row) return null;
-  return { ...row, credits: Number(row.credits), priceCents: Number(row.priceCents) };
+  return { ...row, tickets: Number(row.tickets), priceCents: Number(row.priceCents) };
 }
 
 /**
- * Buy a pass: an order, the pass it creates, and — on a public circle — the
+ * Buy a package: an order, the package it creates, and — on a public community — the
  * approved membership, all in one `batch()`.
  *
  * **The nonce is spent into `orders.reference`.** `purchaseReference(nonce)`
@@ -161,19 +161,19 @@ export async function getPackageForCircle(
  */
 export async function purchase(
   env: CommerceEnv,
-  input: { userId: string; circleId: string; packageId: string; nonce?: string },
+  input: { userId: string; communityId: string; packageId: string; nonce?: string },
 ): Promise<PurchaseResult> {
   const db = getDb(env);
   const log = createLogger(env);
 
-  const [circle] = await db
-    .select({ id: circles.id, isPrivate: circles.isPrivate })
-    .from(circles)
-    .where(eq(circles.id, input.circleId))
+  const [community] = await db
+    .select({ id: communities.id, isPrivate: communities.isPrivate })
+    .from(communities)
+    .where(eq(communities.id, input.communityId))
     .limit(1);
-  if (!circle) return { status: "package_not_found" };
+  if (!community) return { status: "package_not_found" };
 
-  const offer = await getPackageForCircle(env, input.circleId, input.packageId);
+  const offer = await getPackageForCommunity(env, input.communityId, input.packageId);
   if (!offer) return { status: "package_not_found" };
 
   const reference = input.nonce ? await purchaseReference(input.nonce) : orderReference();
@@ -184,8 +184,8 @@ export async function purchase(
   if (replay) return { status: "already_processed", orderId: replay.id, reference };
 
   const orderId = newId();
-  const passId = newId();
-  const joinCircle = !circle.isPrivate;
+  const memberPackageId = newId();
+  const joinCommunity = !community.isPrivate;
 
   // Typed as what `batch()` takes, so pushing a different table's insert below
   // does not widen the array into something it will not accept.
@@ -193,32 +193,32 @@ export async function purchase(
     db.insert(orders).values({
       id: orderId,
       userId: input.userId,
-      circleId: input.circleId,
+      communityId: input.communityId,
       packageId: offer.id,
       reference,
-      credits: offer.credits,
+      tickets: offer.tickets,
       amountCents: offer.priceCents,
       currency: offer.currency,
       status: "paid",
     }),
-    db.insert(passes).values({
-      id: passId,
+    db.insert(memberPackages).values({
+      id: memberPackageId,
       userId: input.userId,
-      circleId: input.circleId,
+      communityId: input.communityId,
       orderId,
-      creditsTotal: offer.credits,
-      creditsUsed: 0,
+      ticketsTotal: offer.tickets,
+      ticketsUsed: 0,
     }),
   ];
-  if (joinCircle) {
+  if (joinCommunity) {
     // "…and the member has none" is enforced by the unique index rather than by
     // a read first: a member who is already in keeps the row they have.
     statements.push(
       db
-        .insert(circleMembers)
+        .insert(communityMembers)
         .values({
           id: newId(),
-          circleId: input.circleId,
+          communityId: input.communityId,
           userId: input.userId,
           role: "member",
           status: "approved",
@@ -240,16 +240,16 @@ export async function purchase(
     throw err;
   }
 
-  log.info("pass purchased", { orderId, circleId: input.circleId });
+  log.info("package purchased", { orderId, communityId: input.communityId });
   return {
     status: "created",
     orderId,
     reference,
-    passId,
-    credits: offer.credits,
+    memberPackageId,
+    tickets: offer.tickets,
     amountCents: offer.priceCents,
     currency: offer.currency,
-    joinedCircle: joinCircle,
+    joinedCommunity: joinCommunity,
   };
 }
 
@@ -267,10 +267,10 @@ async function findOrderByReference(
 }
 
 /**
- * Take a place at a gathering, spending one credit.
+ * Take a place at an event, spending one ticket.
  *
- * Booking needs an approved membership AND a pass with a credit left, and the
- * gathering must not be full. A member who is already booked gets their ticket
+ * Booking needs an approved membership AND a package with a ticket left, and the
+ * event must not be full. A member who is already booked gets their ticket
  * code back and spends nothing — the repeat is the same place, not a second one.
  */
 export async function book(
@@ -283,7 +283,7 @@ export async function book(
   const [event] = await db
     .select({
       id: events.id,
-      circleId: events.circleId,
+      communityId: events.communityId,
       capacity: events.capacity,
       status: events.status,
       confirmed: confirmedBookingCount(events.id),
@@ -303,10 +303,10 @@ export async function book(
   if (existing?.status === "confirmed") return { status: "already_booked", code: existing.code };
 
   const [membership] = await db
-    .select({ status: circleMembers.status })
-    .from(circleMembers)
+    .select({ status: communityMembers.status })
+    .from(communityMembers)
     .where(
-      and(eq(circleMembers.circleId, event.circleId), eq(circleMembers.userId, input.userId)),
+      and(eq(communityMembers.communityId, event.communityId), eq(communityMembers.userId, input.userId)),
     )
     .limit(1);
   if (!membership) return { status: "not_a_member" };
@@ -318,31 +318,31 @@ export async function book(
 
   if (placesLeft(event.capacity, event.confirmed) <= 0) return { status: "full" };
 
-  const [pass] = await db
+  const [held] = await db
     .select({
-      id: passes.id,
-      creditsTotal: passes.creditsTotal,
-      creditsUsed: passes.creditsUsed,
+      id: memberPackages.id,
+      ticketsTotal: memberPackages.ticketsTotal,
+      ticketsUsed: memberPackages.ticketsUsed,
     })
-    .from(passes)
+    .from(memberPackages)
     .where(
       and(
-        eq(passes.userId, input.userId),
-        eq(passes.circleId, event.circleId),
-        lt(passes.creditsUsed, passes.creditsTotal),
+        eq(memberPackages.userId, input.userId),
+        eq(memberPackages.communityId, event.communityId),
+        lt(memberPackages.ticketsUsed, memberPackages.ticketsTotal),
       ),
     )
-    // Spend the oldest pass first, so a member never strands credits.
-    .orderBy(asc(passes.createdAt))
+    // Spend the oldest package first, so a member never strands tickets.
+    .orderBy(asc(memberPackages.createdAt))
     .limit(1);
-  if (!pass) return { status: "no_credits" };
+  if (!held) return { status: "no_tickets" };
 
   // `credits_used < credits_total` in the WHERE as well as in the read above:
   // the read decided, the write refuses to overspend even if it lost a race.
-  const spendCredit = db
-    .update(passes)
-    .set({ creditsUsed: sql`${passes.creditsUsed} + 1` })
-    .where(and(eq(passes.id, pass.id), lt(passes.creditsUsed, passes.creditsTotal)));
+  const spendTicket = db
+    .update(memberPackages)
+    .set({ ticketsUsed: sql`${memberPackages.ticketsUsed} + 1` })
+    .where(and(eq(memberPackages.id, held.id), lt(memberPackages.ticketsUsed, memberPackages.ticketsTotal)));
 
   if (existing) {
     // Re-booking a place they cancelled: the row and its code come back rather
@@ -350,15 +350,15 @@ export async function book(
     await batch(env, [
       db
         .update(bookings)
-        .set({ status: "confirmed", passId: pass.id })
+        .set({ status: "confirmed", memberPackageId: held.id })
         .where(eq(bookings.id, existing.id)),
-      spendCredit,
+      spendTicket,
     ]);
     log.info("booking reinstated", { eventId: event.id });
     return {
       status: "booked",
       code: existing.code,
-      creditsLeft: pass.creditsTotal - pass.creditsUsed - 1,
+      ticketsLeft: held.ticketsTotal - held.ticketsUsed - 1,
     };
   }
 
@@ -368,15 +368,15 @@ export async function book(
       id: newId(),
       eventId: event.id,
       userId: input.userId,
-      passId: pass.id,
+      memberPackageId: held.id,
       code,
       status: "confirmed",
     }),
-    spendCredit,
+    spendTicket,
   ]);
 
   log.info("booking confirmed", { eventId: event.id });
-  return { status: "booked", code, creditsLeft: pass.creditsTotal - pass.creditsUsed - 1 };
+  return { status: "booked", code, ticketsLeft: held.ticketsTotal - held.ticketsUsed - 1 };
 }
 
 /**
@@ -408,12 +408,12 @@ export type TicketResult =
       amountCents: number;
       currency: string;
       /** True when buying the ticket also made them an approved member. */
-      joinedCircle: boolean;
+      joinedCommunity: boolean;
     }
   | { status: "already_booked"; code: string }
   /** The same form submitted twice. `code` is the place the first submit made. */
   | { status: "already_processed"; reference: string; code: string | null }
-  /** The circle sells no 1-credit pass, so there is no single ticket to sell. */
+  /** The community sells no 1-ticket package, so there is no single ticket to sell. */
   | { status: "no_single_package" }
   | { status: "event_not_found" }
   | { status: "not_published" }
@@ -424,19 +424,19 @@ export type TicketResult =
   | { status: "reversed" };
 
 /**
- * Buy one place at one gathering, without the member having to think about
- * passes: it buys the circle's 1-credit pass and spends that credit on this
- * gathering, in one action.
+ * Buy one place at one event, without the member having to think about
+ * packages: it buys the community's 1-ticket package and spends that ticket on this
+ * event, in one action.
  *
  * **Nothing here reimplements `purchase()` or `book()`** — each keeps its own
- * `batch()`, so the order-plus-pass write and the booking-plus-credit write are
+ * `batch()`, so the order-plus-package write and the booking-plus-ticket write are
  * each still all-or-nothing. What this adds is the guarantee *across* them:
  *
  *   1. Every refusal `book()` can produce is checked BEFORE any money moves,
  *      so the normal way to fail is to fail having bought nothing.
  *   2. The one refusal that survives that check is losing a race for the last
  *      place between the two writes. That is compensated: the order is marked
- *      `refunded` and the pass it created is deleted, in one `batch()`. So a
+ *      `refunded` and the package it created is deleted, in one `batch()`. So a
  *      paid order with no booking is never left behind.
  *
  * The nonce is the same one-time nonce the checkout form uses — `purchase()`
@@ -453,14 +453,14 @@ export async function purchaseTicket(
   const [event] = await db
     .select({
       id: events.id,
-      circleId: events.circleId,
+      communityId: events.communityId,
       capacity: events.capacity,
       status: events.status,
-      isPrivate: circles.isPrivate,
+      isPrivate: communities.isPrivate,
       confirmed: confirmedBookingCount(events.id),
     })
     .from(events)
-    .innerJoin(circles, eq(circles.id, events.circleId))
+    .innerJoin(communities, eq(communities.id, events.communityId))
     .where(eq(events.slug, input.eventSlug))
     .limit(1);
   if (!event) return { status: "event_not_found" };
@@ -475,13 +475,13 @@ export async function purchaseTicket(
     .limit(1);
   if (existing?.status === "confirmed") return { status: "already_booked", code: existing.code };
 
-  // Buying joins an open circle, so only an existing non-approved row can
+  // Buying joins an open community, so only an existing non-approved row can
   // refuse: `purchase()` inserts the membership with `onConflictDoNothing`, and
   // a pending row would survive it and then stop `book()`.
   const [membership] = await db
-    .select({ status: circleMembers.status })
-    .from(circleMembers)
-    .where(and(eq(circleMembers.circleId, event.circleId), eq(circleMembers.userId, input.userId)))
+    .select({ status: communityMembers.status })
+    .from(communityMembers)
+    .where(and(eq(communityMembers.communityId, event.communityId), eq(communityMembers.userId, input.userId)))
     .limit(1);
   if (membership) {
     if (membership.status === "pending") return { status: "membership_pending" };
@@ -492,12 +492,12 @@ export async function purchaseTicket(
 
   if (placesLeft(event.capacity, event.confirmed) <= 0) return { status: "full" };
 
-  const single = (await listPackages(env, event.circleId)).find((offer) => offer.credits === 1);
+  const single = (await listPackages(env, event.communityId)).find((offer) => offer.tickets === 1);
   if (!single) return { status: "no_single_package" };
 
   const bought = await purchase(env, {
     userId: input.userId,
-    circleId: event.circleId,
+    communityId: event.communityId,
     packageId: single.id,
     nonce: input.nonce,
   });
@@ -526,24 +526,24 @@ export async function purchaseTicket(
       reference: bought.reference,
       amountCents: bought.amountCents,
       currency: bought.currency,
-      joinedCircle: bought.joinedCircle,
+      joinedCommunity: bought.joinedCommunity,
     };
   }
 
-  // Compensation, not a retry: the credit exists but the place does not, so the
+  // Compensation, not a retry: the ticket exists but the place does not, so the
   // order stops standing. One `batch()` — a refunded order still holding a live
-  // pass would be a credit nobody paid for.
+  // package would be a ticket nobody paid for.
   await batch(env, [
     db.update(orders).set({ status: "refunded" }).where(eq(orders.id, bought.orderId)),
-    db.delete(passes).where(eq(passes.id, bought.passId)),
+    db.delete(memberPackages).where(eq(memberPackages.id, bought.memberPackageId)),
   ]);
   log.warn("ticket reversed", { orderId: bought.orderId, reason: booked.status });
   return { status: "reversed" };
 }
 
 /**
- * Give the place back and return the credit — one `batch()`, and `greatest(…,0)`
- * so a double cancel can never drive a pass below zero credits used.
+ * Give the place back and return the ticket — one `batch()`, and `greatest(…,0)`
+ * so a double cancel can never drive a package below zero tickets used.
  */
 export async function cancel(
   env: CommerceEnv,
@@ -556,7 +556,7 @@ export async function cancel(
     .select({
       id: bookings.id,
       userId: bookings.userId,
-      passId: bookings.passId,
+      memberPackageId: bookings.memberPackageId,
       code: bookings.code,
       status: bookings.status,
     })
@@ -570,51 +570,51 @@ export async function cancel(
   await batch(env, [
     db.update(bookings).set({ status: "cancelled" }).where(eq(bookings.id, booking.id)),
     db
-      .update(passes)
-      .set({ creditsUsed: sql`greatest(${passes.creditsUsed} - 1, 0)` })
-      .where(eq(passes.id, booking.passId)),
+      .update(memberPackages)
+      .set({ ticketsUsed: sql`greatest(${memberPackages.ticketsUsed} - 1, 0)` })
+      .where(eq(memberPackages.id, booking.memberPackageId)),
   ]);
 
   log.info("booking cancelled", { bookingId: booking.id });
   return { status: "cancelled", code: booking.code };
 }
 
-/** The passes a member holds, newest first. */
-export async function listPassesForUser(
+/** The packages a member holds, newest first. */
+export async function listPackagesForUser(
   env: DatabaseEnv,
   userId: string,
   options: { limit?: number } = {},
-): Promise<PassSummary[]> {
+): Promise<MemberPackageSummary[]> {
   const db = getDb(env);
   const rows = await db
     .select({
-      id: passes.id,
-      circleSlug: circles.slug,
-      circleName: circles.name,
-      creditsTotal: passes.creditsTotal,
-      creditsUsed: passes.creditsUsed,
+      id: memberPackages.id,
+      communitySlug: communities.slug,
+      communityName: communities.name,
+      ticketsTotal: memberPackages.ticketsTotal,
+      ticketsUsed: memberPackages.ticketsUsed,
     })
-    .from(passes)
-    .innerJoin(circles, eq(circles.id, passes.circleId))
-    .where(eq(passes.userId, userId))
-    .orderBy(desc(passes.createdAt))
+    .from(memberPackages)
+    .innerJoin(communities, eq(communities.id, memberPackages.communityId))
+    .where(eq(memberPackages.userId, userId))
+    .orderBy(desc(memberPackages.createdAt))
     .limit(boundLimit(options.limit));
 
   return rows.map((row) => {
-    const creditsTotal = Number(row.creditsTotal);
-    const creditsUsed = Number(row.creditsUsed);
+    const ticketsTotal = Number(row.ticketsTotal);
+    const ticketsUsed = Number(row.ticketsUsed);
     return {
       id: row.id,
-      circleSlug: row.circleSlug,
-      circleName: row.circleName,
-      creditsTotal,
-      creditsUsed,
-      creditsLeft: Math.max(0, creditsTotal - creditsUsed),
+      communitySlug: row.communitySlug,
+      communityName: row.communityName,
+      ticketsTotal,
+      ticketsUsed,
+      ticketsLeft: Math.max(0, ticketsTotal - ticketsUsed),
     };
   });
 }
 
-/** A member's tickets, soonest gathering first. Cancelled ones are kept — it is their history. */
+/** A member's tickets, soonest event first. Cancelled ones are kept — it is their history. */
 export async function listBookingsForUser(
   env: DatabaseEnv,
   userId: string,
@@ -628,12 +628,12 @@ export async function listBookingsForUser(
       eventSlug: events.slug,
       eventTitle: events.title,
       startsAt: events.startsAt,
-      circleSlug: circles.slug,
-      circleName: circles.name,
+      communitySlug: communities.slug,
+      communityName: communities.name,
     })
     .from(bookings)
     .innerJoin(events, eq(events.id, bookings.eventId))
-    .innerJoin(circles, eq(circles.id, events.circleId))
+    .innerJoin(communities, eq(communities.id, events.communityId))
     .where(eq(bookings.userId, userId))
     .orderBy(asc(events.startsAt))
     .limit(boundLimit(options.limit));
@@ -642,19 +642,19 @@ export async function listBookingsForUser(
 }
 
 /**
- * The circles this member runs, in creation order — the contract is explicit
- * that a newly created circle appears last in `/api/me`.
+ * The communities this member runs, in creation order — the contract is explicit
+ * that a newly created community appears last in `/api/me`.
  */
-export async function listHostedCircles(
+export async function listHostedCommunities(
   env: DatabaseEnv,
   userId: string,
   options: { limit?: number } = {},
-): Promise<HostedCircle[]> {
+): Promise<HostedCommunity[]> {
   const db = getDb(env);
   return db
-    .select({ slug: circles.slug, name: circles.name })
-    .from(circles)
-    .where(eq(circles.hostUserId, userId))
-    .orderBy(asc(circles.createdAt))
+    .select({ slug: communities.slug, name: communities.name })
+    .from(communities)
+    .where(eq(communities.hostUserId, userId))
+    .orderBy(asc(communities.createdAt))
     .limit(boundLimit(options.limit));
 }

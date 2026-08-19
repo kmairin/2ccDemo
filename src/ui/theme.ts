@@ -109,7 +109,7 @@ type Palette = typeof light;
  * The dark palette — the alternative, not the default.
  *
  * These are §10.2's measured values, unchanged: they were computed against
- * `#0A0A0B` and they pass. The only dark things deleted are the ones that only
+ * `#0A0A0B` and they package. The only dark things deleted are the ones that only
  * ever made sense in the dark — the global film grain and the lit inset
  * highlights on cards.
  */
@@ -505,7 +505,7 @@ body.has-actionbar .site-main { padding-block-end:0; }
 .section { padding-block:var(--band); border-block-start:1px solid var(--line); }
 
 /* An index page exists to show its index. With a full hero band plus a full
-   section band, the first card sat at y=954 on /circles — zero content above
+   section band, the first card sat at y=954 on /communities — zero content above
    the fold on a 1280x900 laptop. Index pages get a tighter rhythm; the landing
    page keeps the full one, because there the statement IS the content. */
 .page-index .hero { padding-block:clamp(48px,9vw,110px) clamp(24px,4vw,48px); }
@@ -568,7 +568,7 @@ body.has-actionbar .site-main { padding-block-end:0; }
   text-shadow:var(--plate-emboss);
   user-select:none;
 }
-/* Gatherings get a chart rule instead of a monogram — instrumentation, not
+/* Events get a chart rule instead of a monogram — instrumentation, not
    decoration. Two repeating gradients: an 8px tick, and every fifth taller. */
 .plate-rule {
   position:absolute; inset-inline:0; bottom:14%; height:16%;
@@ -603,7 +603,7 @@ body.has-actionbar .site-main { padding-block-end:0; }
   box-shadow:inset 0 0 0 1px var(--photo-edge), var(--photo-vignette);
   pointer-events:none;
 }
-/* The circle and gathering heroes pull their h1 up over the cover's lower edge
+/* The community and event heroes pull their h1 up over the cover's lower edge
    (§5, margin-top:-.4em). Against a generated plate that was safe, because the
    ground was ours. Against a photograph it is not, and it fails in BOTH
    themes: measured on /events/first-light-plunge at 1280, the 22px the title
@@ -972,37 +972,37 @@ fieldset[disabled] input { color:var(--ink-3); border-block-end-style:dashed; }
   .cal-cell .cal-entry .num { margin-inline-end:var(--s1); }
 }
 
-/* ---------- pass table (§5: one bordered table, not three cards) ---------- */
+/* ---------- package table (§5: one bordered table, not three cards) ---------- */
 
-.pass-table { width:100%; min-width:19rem; border-collapse:collapse; text-align:left; }
-.pass-table th,.pass-table td { padding:var(--s4) var(--s3); border-block-end:1px solid var(--line); vertical-align:top; }
-.pass-table thead th {
+.package-table { width:100%; min-width:19rem; border-collapse:collapse; text-align:left; }
+.package-table th,.package-table td { padding:var(--s4) var(--s3); border-block-end:1px solid var(--line); vertical-align:top; }
+.package-table thead th {
   padding-block:var(--s3); font-size:var(--t-micro); font-weight:500;
   text-transform:uppercase; letter-spacing:.18em; color:var(--ink-faint);
 }
-.pass-table tbody tr:last-child th,.pass-table tbody tr:last-child td { border-block-end:0; }
-.pass-table th:first-child,.pass-table td:first-child { padding-inline-start:var(--s4); }
-.pass-table th:last-child,.pass-table td:last-child { padding-inline-end:var(--s4); text-align:right; }
-.pass-name {
+.package-table tbody tr:last-child th,.package-table tbody tr:last-child td { border-block-end:0; }
+.package-table th:first-child,.package-table td:first-child { padding-inline-start:var(--s4); }
+.package-table th:last-child,.package-table td:last-child { padding-inline-end:var(--s4); text-align:right; }
+.package-name {
   font-family:var(--display); font-variation-settings:'SOFT' 0,'WONK' 0,'opsz' 144;
   font-size:var(--t-card); font-weight:400; color:var(--ink);
 }
-.pass-price { font-family:var(--mono); font-weight:500; color:var(--accent); white-space:nowrap; }
-.pass-derivation { display:block; margin-block-start:var(--s1); font-size:var(--t-meta); color:var(--ink-faint); }
+.package-price { font-family:var(--mono); font-weight:500; color:var(--accent); white-space:nowrap; }
+.package-derivation { display:block; margin-block-start:var(--s1); font-size:var(--t-meta); color:var(--ink-faint); }
 .bordered { border:1px solid var(--line); border-radius:2px; background:var(--card); }
 
-/* ---------- pass cards (account, where a table would be overkill) ---------- */
+/* ---------- package cards (account, where a table would be overkill) ---------- */
 
-.pass-grid { display:grid; gap:1px; grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr)); }
-.pass-grid > * { min-width:0; box-shadow:0 0 0 1px var(--line); }
-.pass-card { background:var(--card); padding:var(--s5); display:flex; flex-direction:column; gap:var(--s2); height:100%; }
-.pass-card-price { font-family:var(--mono); font-weight:500; font-size:var(--t-card); color:var(--accent); }
+.package-grid { display:grid; gap:1px; grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr)); }
+.package-grid > * { min-width:0; box-shadow:0 0 0 1px var(--line); }
+.package-card { background:var(--card); padding:var(--s5); display:flex; flex-direction:column; gap:var(--s2); height:100%; }
+.package-card-price { font-family:var(--mono); font-weight:500; font-size:var(--t-card); color:var(--accent); }
 
-/* ---------- credits: N hairline squares, filled = spent (§5) ---------- */
+/* ---------- tickets: N hairline squares, filled = spent (§5) ---------- */
 
-.credits { display:flex; flex-wrap:wrap; gap:6px; }
-.credit-sq { width:16px; height:16px; border:1px solid var(--line-strong); border-radius:1px; }
-.credit-sq.is-spent { background:var(--ink-3); border-color:var(--ink-3); }
+.tickets { display:flex; flex-wrap:wrap; gap:6px; }
+.ticket-sq { width:16px; height:16px; border:1px solid var(--line-strong); border-radius:1px; }
+.ticket-sq.is-spent { background:var(--ink-3); border-color:var(--ink-3); }
 
 /* ---------- action area (the contract's seven states) ---------- */
 
@@ -1014,7 +1014,7 @@ fieldset[disabled] input { color:var(--ink-3); border-block-end-style:dashed; }
 .action-help { font-size:var(--t-meta); color:var(--ink-3); }
 .action-help a { border-block-end:1px solid var(--accent-hair); }
 .action-help a:hover { color:var(--accent-2); }
-.action-passes { display:grid; gap:var(--s2); }
+.action-packages { display:grid; gap:var(--s2); }
 .action-heading { font-size:var(--t-meta); color:var(--ink); }
 .action-stub {
   display:flex; align-items:center; justify-content:space-between; gap:var(--s3);
