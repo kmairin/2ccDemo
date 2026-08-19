@@ -738,11 +738,33 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
          * list anyway. The cursor below is progress telemetry, not a resume
          * point.
          */
+        // Only this pass's failures, so the record below is about this attempt.
+        bootstrapReport.failures.length = 0;
         const reached = await apply(env, additions, 0, budget, {
           oneAtATime: true,
           checkpoint: (at) => writeMeta(env, "add_cursor", `${BOOTSTRAP_VERSION}:${at}`),
         });
         await writeMeta(env, "add_cursor", `${BOOTSTRAP_VERSION}:${reached}`);
+
+        /**
+         * Record what went wrong on EVERY pass, not only on one that finishes.
+         *
+         * This was written only after a completed pass, and the pass could not
+         * complete: twenty-five statements against a twenty-trip budget. So a
+         * repair that failed identically on every request left a stale error
+         * from some earlier attempt sitting in `app_meta`, and the count in it
+         * never moved — which reads exactly like a pass that is not running at
+         * all. There is no console here; this string is the only witness.
+         */
+        const failed = bootstrapReport.failures
+          .map((f) => `${f.statement.slice(0, 54)} => ${f.error.slice(0, 140)}`)
+          .join(" ;; ");
+        await writeMeta(
+          env,
+          "add_error",
+          `${reached}/${additions.length} done | ${failed || "no failures"}`.slice(0, 900),
+        );
+
         if (reached < additions.length) {
           log.info("still adding tables, will resume next request", {
             added: reached,
@@ -768,17 +790,11 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
         const after = await inspectSchema(env);
         const stillAbsent = [...after.absent, ...after.absentIndexes];
         if (stillAbsent.length > 0) {
-          const why = bootstrapReport.failures
-            .map((f) => `${f.statement.slice(0, 60)} => ${f.error}`)
-            .join(" ;; ");
           await writeMeta(
             env,
             "add_error",
-            `${stillAbsent.join(",")} | ${why || "no error recorded"}`.slice(0, 900),
+            `still absent: ${stillAbsent.join(",")} | ${failed || "no failures"}`.slice(0, 900),
           );
-          // Re-attempt the whole (short) list next request rather than resuming
-          // past the statement that failed, which is the one that matters.
-          await writeMeta(env, "add_cursor", `${BOOTSTRAP_VERSION}:0`);
           log.error("a table the bundle declares could not be created", {
             tables: stillAbsent.join(", "),
           });
