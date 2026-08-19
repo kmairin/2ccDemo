@@ -643,6 +643,40 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
           });
           return false;
         }
+        /**
+         * Did the tables actually appear?
+         *
+         * `apply` deliberately steps over a statement the database refuses, so
+         * reaching the end of the pass says only that every statement was
+         * ATTEMPTED. Deployed, `CREATE TABLE "wallets"` was rejected while
+         * `wallet_txns` beside it succeeded; the pass ran to the end, stamped
+         * the shape as current, and every signed-in page 500d on a table that
+         * was never there — behind a marker that said the schema was fine.
+         *
+         * So ask the database, and refuse to stamp anything until it agrees.
+         * The failure text goes into `app_meta`, because this is a worker with
+         * no console and the in-memory report dies with the isolate that wrote
+         * it: without a durable copy, diagnosing this costs a deploy per guess.
+         */
+        const stillAbsent = (await inspectSchema(env)).absent;
+        if (stillAbsent.length > 0) {
+          const why = bootstrapReport.failures
+            .map((f) => `${f.statement.slice(0, 60)} => ${f.error}`)
+            .join(" ;; ");
+          await writeMeta(
+            env,
+            "add_error",
+            `${stillAbsent.join(",")} | ${why || "no error recorded"}`.slice(0, 900),
+          );
+          // Re-attempt the whole (short) list next request rather than resuming
+          // past the statement that failed, which is the one that matters.
+          await writeMeta(env, "add_cursor", `${BOOTSTRAP_VERSION}:0`);
+          log.error("a table the bundle declares could not be created", {
+            tables: stillAbsent.join(", "),
+          });
+          return false;
+        }
+        await writeMeta(env, "add_error", "");
         // The existing tables were untouched, so the data already loaded is
         // still valid — only the shape marker moves.
         await writeMeta(env, "schema_version", BOOTSTRAP_VERSION);
