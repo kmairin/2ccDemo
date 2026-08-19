@@ -454,7 +454,7 @@ async function inspectSchema(env: EnsureEnv): Promise<SchemaGap> {
 function statementsBuilding(tables: readonly string[], indexes: readonly string[] = []): string[] {
   const wantedTables = new Set(tables);
   const wantedIndexes = new Set(indexes);
-  return BOOTSTRAP_STATEMENTS.filter((statement) => {
+  const build = BOOTSTRAP_STATEMENTS.filter((statement) => {
     if (isDataStatement(statement) || isNoise(statement) || isAlter(statement)) return false;
     const index = /^CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"(\w+)"/i.exec(statement)?.[1];
     if (index !== undefined) {
@@ -466,6 +466,37 @@ function statementsBuilding(tables: readonly string[], indexes: readonly string[
     const table = /"public"\."(\w+)"/.exec(statement)?.[1];
     return table !== undefined && wantedTables.has(table);
   });
+
+  /**
+   * Unlock the tables first, or none of this can run.
+   *
+   * The deployed tables carry `schema_locked = true`, and the database refuses
+   * a `CREATE INDEX` against one in as many words: "this schema change is
+   * disallowed because table X is locked and this operation cannot
+   * automatically unlock the table". The bundle contains the matching
+   * `SET (schema_locked = false)` statements, but `isNoise` strips them — so
+   * for the whole life of this deployment every index statement was rejected
+   * and nothing looked wrong, because nothing needed an index until `topUp`
+   * upserted with `ON CONFLICT (user_id)`. Production was missing sixteen of
+   * the bundle's twenty-five indexes.
+   *
+   * They stay unlocked afterwards, deliberately. Re-locking would rebuild the
+   * same trap for the next index this schema gains, and nothing in this app
+   * relies on the lock.
+   *
+   * Unlocking is a storage-parameter change, not the DDL the lock forbids, so
+   * it is the one `ALTER TABLE` this database does accept. A table that does
+   * not exist yet simply fails here and `apply` steps over it.
+   */
+  const needUnlock = new Set<string>(tables);
+  for (const statement of build) {
+    const on = /ON "public"\."(\w+)"/i.exec(statement)?.[1];
+    if (on !== undefined) needUnlock.add(on);
+  }
+  const unlocks = [...needUnlock].map(
+    (table) => `ALTER TABLE "public"."${table}" SET (schema_locked = false)`,
+  );
+  return [...unlocks, ...build];
 }
 
 /**
@@ -696,8 +727,18 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
           indexes: absentIndexes.join(", ") || "none",
           statements: additions.length,
         });
-        const from = readCursor(await readMeta(env, "add_cursor"));
-        const reached = await apply(env, additions, from, budget, {
+        /**
+         * Always from the start, never resumed.
+         *
+         * `additions` is recomputed from the CURRENT gap, so it gets shorter
+         * every time something is created — a cursor saved against the previous
+         * list points into a different one and would skip whatever shifted past
+         * it. Every statement here is `IF NOT EXISTS`, so re-reaching a
+         * satisfied one is a cheap no-op, and satisfied objects drop out of the
+         * list anyway. The cursor below is progress telemetry, not a resume
+         * point.
+         */
+        const reached = await apply(env, additions, 0, budget, {
           oneAtATime: true,
           checkpoint: (at) => writeMeta(env, "add_cursor", `${BOOTSTRAP_VERSION}:${at}`),
         });
