@@ -278,8 +278,19 @@ const BUNDLE_HAS_EVENTS = DATA_STATEMENTS.some((s) =>
 );
 
 async function worldLooksLoaded(env: EnsureEnv): Promise<boolean> {
-  if (!BUNDLE_HAS_EVENTS) return true;
   try {
+    /**
+     * The tables first, and for the same reason.
+     *
+     * `schema_version` is exactly as untrustworthy as `seed_version` was, and
+     * for a worse outcome: deployed, it was stamped current while `wallets` had
+     * been refused, so the marker said the shape was fine and every signed-in
+     * page 500d on a table that did not exist. Nothing re-checked, because the
+     * marker matched. Ask the database instead — one round trip, once per
+     * isolate, and a missing table repairs itself instead of persisting.
+     */
+    if ((await inspectSchema(env)).absent.length > 0) return false;
+    if (!BUNDLE_HAS_EVENTS) return true;
     const db = getDb(env);
     return scalar(await db.execute(sql`select count(*)::int from events`)) > 0;
   } catch {
@@ -597,8 +608,19 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
     // will not accept an ALTER. Drop and recreate — once per version, and only
     // marked done when the pass has actually run to the end, so an interrupted
     // rebuild is never mistaken for a finished one.
-    if ((await readMeta(env, "schema_version")) !== BOOTSTRAP_VERSION) {
-      const { missing, absent } = await inspectSchema(env);
+    /**
+     * Ask the database what shape it is in; use the marker only to skip work
+     * that is provably done.
+     *
+     * This used to be gated on `schema_version` alone, which meant a marker
+     * written in error could never be corrected: production stamped the shape
+     * as current with `wallets` missing, and from then on this whole branch was
+     * skipped on every request while every signed-in page 500d. A real gap now
+     * outranks the marker.
+     */
+    const { missing, absent } = await inspectSchema(env);
+    const shapeStamped = (await readMeta(env, "schema_version")) === BOOTSTRAP_VERSION;
+    if (missing.length > 0 || !shapeStamped) {
       const onlyNewTables =
         missing.length > 0 && missing.every((gap) => absent.includes(gap.split(".")[0]));
       if (missing.length === 0) {
