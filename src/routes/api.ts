@@ -96,7 +96,35 @@ api.get("/health", async (c) => {
   // that serves empty lists. Counts and our own SQL errors only.
   if (c.req.query("schema") === "1") {
     const { bootstrapReport } = await import("../ensure-schema");
-    return c.json({ status: "ok", bootstrap: bootstrapReport });
+    // Also dump app_meta and the row counts. Three fixes in a row have been
+    // aimed at a bootstrap whose internal state was invisible from outside, and
+    // each guess cost a deploy cycle. Bookkeeping values and counts only.
+    const meta: Record<string, string> = {};
+    const counts: Record<string, number> = {};
+    try {
+      const { getDb } = await import("../db");
+      const { sql } = await import("drizzle-orm");
+      const db = getDb(c.env);
+      const rows = (await db.execute(
+        sql`select "key", "value" from "app_meta" order by "key"`,
+      )) as unknown as unknown[];
+      for (const r of rows) {
+        const [k, v] = Array.isArray(r) ? r : Object.values(r as object);
+        meta[String(k)] = String(v);
+      }
+      for (const t of ["communities", "events", "packages", "photos", "bookings"]) {
+        try {
+          const n = (await db.execute(sql.raw(`select count(*)::int from "${t}"`))) as unknown as unknown[];
+          const first = n[0];
+          counts[t] = Number(Array.isArray(first) ? first[0] : Object.values(first as object)[0]);
+        } catch {
+          counts[t] = -1;
+        }
+      }
+    } catch (err) {
+      meta.error = err instanceof Error ? err.message.slice(0, 160) : String(err);
+    }
+    return c.json({ status: "ok", bootstrap: bootstrapReport, meta, counts });
   }
 
   // TEMPORARY diagnostic. `?schema=1` reports what the isolate ANSWERING IT has
