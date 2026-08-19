@@ -289,7 +289,8 @@ async function worldLooksLoaded(env: EnsureEnv): Promise<boolean> {
      * marker matched. Ask the database instead — one round trip, once per
      * isolate, and a missing table repairs itself instead of persisting.
      */
-    if ((await inspectSchema(env)).absent.length > 0) return false;
+    const shape = await inspectSchema(env);
+    if (shape.absent.length > 0 || shape.absentIndexes.length > 0) return false;
     if (!BUNDLE_HAS_EVENTS) return true;
     const db = getDb(env);
     return scalar(await db.execute(sql`select count(*)::int from events`)) > 0;
@@ -385,7 +386,23 @@ type SchemaGap = {
   missing: string[];
   /** Tables the bundle declares that the database has never heard of. */
   absent: string[];
+  /** Indexes the bundle declares that are not on the database. */
+  absentIndexes: string[];
 };
+
+/**
+ * Every index the bundle builds, by name.
+ *
+ * Indexes are not decoration here. `topUp` upserts with
+ * `ON CONFLICT (user_id)`, which Postgres will only accept when a UNIQUE index
+ * on that column exists — without it the statement does not misbehave quietly,
+ * it throws. Deployed, `wallets` was created while its unique index was not, so
+ * the wallet page rendered and every top-up 500d.
+ */
+const EXPECTED_INDEXES: string[] = BOOTSTRAP_STATEMENTS.flatMap((statement) => {
+  const name = /^CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"(\w+)"/i.exec(statement)?.[1];
+  return name ? [name] : [];
+});
 
 async function inspectSchema(env: EnsureEnv): Promise<SchemaGap> {
   const rows = (await timed("columns", async () =>
@@ -411,7 +428,22 @@ async function inspectSchema(env: EnsureEnv): Promise<SchemaGap> {
       if (!present.has(`${table}.${column}`)) missing.push(`${table}.${column}`);
     }
   }
-  return { missing, absent };
+
+  const absentIndexes: string[] = [];
+  try {
+    const idx = (await timed("indexes", async () =>
+      getDb(env).execute(sql`select "indexname" from "pg_indexes" where "schemaname" = 'public'`),
+    )) as unknown as unknown[];
+    const built = new Set(
+      idx.map((row) => String(Array.isArray(row) ? row[0] : Object.values(row as object)[0])),
+    );
+    for (const name of EXPECTED_INDEXES) if (!built.has(name)) absentIndexes.push(name);
+  } catch {
+    // No `pg_indexes` to ask. Report none rather than inventing a gap that
+    // would send this into a repair pass on every single request.
+  }
+
+  return { missing, absent, absentIndexes };
 }
 
 /**
@@ -419,12 +451,20 @@ async function inspectSchema(env: EnsureEnv): Promise<SchemaGap> {
  * the `CREATE TABLE` and its indexes, never an `ALTER` (refused here) and never
  * a row. Used to add a new table to a database that is otherwise already right.
  */
-function statementsBuilding(tables: readonly string[]): string[] {
-  const wanted = new Set(tables);
+function statementsBuilding(tables: readonly string[], indexes: readonly string[] = []): string[] {
+  const wantedTables = new Set(tables);
+  const wantedIndexes = new Set(indexes);
   return BOOTSTRAP_STATEMENTS.filter((statement) => {
     if (isDataStatement(statement) || isNoise(statement) || isAlter(statement)) return false;
+    const index = /^CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?"(\w+)"/i.exec(statement)?.[1];
+    if (index !== undefined) {
+      // An index is wanted in its own right, and also whenever its table is
+      // being created — a brand-new table has none of its indexes yet.
+      const on = /ON "public"\."(\w+)"/i.exec(statement)?.[1];
+      return wantedIndexes.has(index) || (on !== undefined && wantedTables.has(on));
+    }
     const table = /"public"\."(\w+)"/.exec(statement)?.[1];
-    return table !== undefined && wanted.has(table);
+    return table !== undefined && wantedTables.has(table);
   });
 }
 
@@ -618,12 +658,15 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
      * skipped on every request while every signed-in page 500d. A real gap now
      * outranks the marker.
      */
-    const { missing, absent } = await inspectSchema(env);
+    const { missing, absent, absentIndexes } = await inspectSchema(env);
     const shapeStamped = (await readMeta(env, "schema_version")) === BOOTSTRAP_VERSION;
-    if (missing.length > 0 || !shapeStamped) {
-      const onlyNewTables =
-        missing.length > 0 && missing.every((gap) => absent.includes(gap.split(".")[0]));
-      if (missing.length === 0) {
+    if (missing.length > 0 || absentIndexes.length > 0 || !shapeStamped) {
+      // Nothing here changes an existing table's shape, so none of it needs the
+      // rebuild this database cannot finish. Creating what is absent is enough.
+      const onlyAdditions =
+        (missing.length > 0 || absentIndexes.length > 0) &&
+        missing.every((gap) => absent.includes(gap.split(".")[0]));
+      if (missing.length === 0 && absentIndexes.length === 0) {
         // The tables already have every column this bundle declares, so there
         // is nothing a rebuild would achieve — and rebuilding is the one thing
         // this database will not do. Record the shape as current and go and
@@ -632,7 +675,7 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
           tables: EXPECTED_COLUMNS.size,
         });
         await writeMeta(env, "schema_version", BOOTSTRAP_VERSION);
-      } else if (onlyNewTables) {
+      } else if (onlyAdditions) {
         /**
          * Every gap is a table that simply is not there yet, so no existing
          * table has changed shape. Create the new ones and leave everything
@@ -647,9 +690,10 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
          * ran, so the next request started from zero. Forever, with the site
          * 500ing throughout. A new table needs none of that.
          */
-        const additions = statementsBuilding(absent);
-        log.info("adding tables the bundle declares and the database lacks", {
-          tables: absent.join(", "),
+        const additions = statementsBuilding(absent, absentIndexes);
+        log.info("adding what the bundle declares and the database lacks", {
+          tables: absent.join(", ") || "none",
+          indexes: absentIndexes.join(", ") || "none",
           statements: additions.length,
         });
         const from = readCursor(await readMeta(env, "add_cursor"));
@@ -680,7 +724,8 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
          * no console and the in-memory report dies with the isolate that wrote
          * it: without a durable copy, diagnosing this costs a deploy per guess.
          */
-        const stillAbsent = (await inspectSchema(env)).absent;
+        const after = await inspectSchema(env);
+        const stillAbsent = [...after.absent, ...after.absentIndexes];
         if (stillAbsent.length > 0) {
           const why = bootstrapReport.failures
             .map((f) => `${f.statement.slice(0, 60)} => ${f.error}`)

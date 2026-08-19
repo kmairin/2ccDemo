@@ -372,6 +372,46 @@ describe.runIf(available)("the deployed bootstrap", () => {
     expect(Number(add!.split(":")[1])).toBeGreaterThan(0);
   });
 
+  it("rebuilds an index that is missing even though its table is there", async () => {
+    /**
+     * The second half of the wallets outage, and the more dangerous half.
+     *
+     * `wallets` was eventually created but its UNIQUE index on `user_id` was
+     * not, and nothing looked wrong: the table existed, the wallet page
+     * rendered, the shape marker said current. But `topUp` upserts with
+     * `ON CONFLICT (user_id)`, which Postgres rejects outright when no unique
+     * index matches — so every top-up on production answered 500 while the
+     * page around it was a clean 200.
+     *
+     * Verifying tables alone cannot catch this. Drop just the index.
+     */
+    await asProduction();
+    await client.unsafe(`drop index if exists wallets_user_id_idx`);
+
+    resetEnsureSchemaForTests();
+    await ensureSchema(env);
+
+    const built = (
+      await client.unsafe(
+        `select indexname from pg_indexes
+         where schemaname = 'public' and indexname = 'wallets_user_id_idx'`,
+      )
+    ).length;
+    expect(built).toBe(1); // the index came back
+    expect(await rows("circles")).toBe(6); // without a rebuild
+
+    // And the upsert the index exists for actually works now.
+    await client.unsafe(
+      `insert into users (id, email, name) values ('u-idx', 'idx@2cc.club', 'Idx')`,
+    );
+    await client.unsafe(
+      `insert into wallets (id, user_id, balance_cents, currency)
+       values ('w-idx', 'u-idx', 0, 'USD')
+       on conflict (user_id) do nothing`,
+    );
+    expect(await rows("wallets")).toBe(1);
+  });
+
   it("records where it got to when the deadline abandons it mid-load", async () => {
     /**
      * Deployed, a request applied 160 statements and recorded a cursor of ZERO.
