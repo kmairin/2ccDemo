@@ -300,6 +300,78 @@ describe.runIf(available)("the deployed bootstrap", () => {
     expect(reset).toBeUndefined(); // the rebuild never even started
   });
 
+  it("adds a brand-new table without dropping anything", async () => {
+    /**
+     * The deadlock that took production down after `wallets` was added.
+     *
+     * A bundle that introduces a table leaves every existing table exactly as
+     * it was, but the gap was measured in COLUMNS, so two absent tables read as
+     * "the shape changed" and triggered a full rebuild. That rebuild drops and
+     * recreates thirteen tables one DDL statement at a time, which the deployed
+     * database cannot finish inside one request — and because the reset pass
+     * never checkpointed, each abandoned attempt recorded nothing and the next
+     * request started again from zero. Forever, with every data page 500ing.
+     *
+     * So: a database that is entirely correct except that the two newest tables
+     * are missing. The right answer is to create those two and touch nothing
+     * else. The `sessions` row is the witness — a rebuild would drop it.
+     */
+    await asProduction();
+    await client.unsafe(`drop table if exists wallet_txns cascade`);
+    await client.unsafe(`drop table if exists wallets cascade`);
+    await client.unsafe(
+      `insert into users (id, email, name) values ('u-new', 'new@2cc.club', 'New')`,
+    );
+    await client.unsafe(
+      `insert into sessions (id, user_id, expires_at)
+       values ('s-new', 'u-new', now() + interval '1 day')`,
+    );
+
+    resetEnsureSchemaForTests();
+    await ensureSchema(env);
+
+    const walletTables = Number(
+      (
+        await client.unsafe(
+          `select count(*)::int as n from information_schema.tables
+           where table_schema = 'public' and table_name in ('wallets', 'wallet_txns')`,
+        )
+      )[0].n,
+    );
+    expect(walletTables).toBe(2); // the new tables were created
+    expect(await rows("sessions")).toBe(1); // and nothing was dropped to do it
+    expect(await rows("circles")).toBe(6); // the data still loaded
+
+    const reset = (
+      await client.unsafe(`select value from app_meta where key = 'reset_cursor'`)
+    )[0]?.value;
+    expect(reset).toBeUndefined(); // no rebuild was ever started
+  });
+
+  it("checkpoints DDL so a rebuild resumes instead of restarting", async () => {
+    /**
+     * `apply` throws its way out of the batch path when `oneAtATime` is set, so
+     * for a whole pass of DDL the caller's checkpoint sat above the throw and
+     * was never once called. A schema pass that outran the request deadline
+     * therefore recorded nothing, and the next request repeated all of it.
+     *
+     * Drive one statement's worth of budget through the add pass and assert the
+     * cursor moved: without the checkpoint in the per-statement loop it stays
+     * unwritten no matter how much work actually happened.
+     */
+    await asProduction();
+    await client.unsafe(`drop table if exists wallet_txns cascade`);
+    await client.unsafe(`drop table if exists wallets cascade`);
+
+    resetEnsureSchemaForTests();
+    await ensureSchema(env);
+
+    const add = (await client.unsafe(`select value from app_meta where key = 'add_cursor'`))[0]
+      ?.value as string | undefined;
+    expect(add).toBeDefined(); // the add pass saved its place
+    expect(Number(add!.split(":")[1])).toBeGreaterThan(0);
+  });
+
   it("records where it got to when the deadline abandons it mid-load", async () => {
     /**
      * Deployed, a request applied 160 statements and recorded a cursor of ZERO.

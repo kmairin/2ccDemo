@@ -361,8 +361,22 @@ async function releaseLease(env: EnsureEnv): Promise<void> {
  *
  * So ask the real question, in one round trip. Nothing missing means nothing to
  * rebuild, and the data can simply be loaded into the tables already there.
+ *
+ * It also reports which tables are not there AT ALL, because that case has a
+ * far cheaper answer than a rebuild. Adding a table to the bundle leaves every
+ * existing table exactly as it was: there is no column to migrate and no row to
+ * rewrite, so the new table can simply be created and the data left alone.
+ * Treating it as a shape change instead is what deadlocked the deployment that
+ * introduced `wallets` — see the caller.
  */
-async function missingColumns(env: EnsureEnv): Promise<string[]> {
+type SchemaGap = {
+  /** `table.column` for every column the bundle declares and the database lacks. */
+  missing: string[];
+  /** Tables the bundle declares that the database has never heard of. */
+  absent: string[];
+};
+
+async function inspectSchema(env: EnsureEnv): Promise<SchemaGap> {
   const rows = (await timed("columns", async () =>
     getDb(env).execute(
       sql`select "table_name", "column_name" from "information_schema"."columns"
@@ -371,18 +385,36 @@ async function missingColumns(env: EnsureEnv): Promise<string[]> {
   )) as unknown as unknown[];
 
   const present = new Set<string>();
+  const tables = new Set<string>();
   for (const row of rows) {
     const [table, column] = Array.isArray(row) ? row : Object.values(row as object);
     present.add(`${String(table)}.${String(column)}`);
+    tables.add(String(table));
   }
 
   const missing: string[] = [];
+  const absent: string[] = [];
   for (const [table, columns] of EXPECTED_COLUMNS) {
+    if (!tables.has(table)) absent.push(table);
     for (const column of columns) {
       if (!present.has(`${table}.${column}`)) missing.push(`${table}.${column}`);
     }
   }
-  return missing;
+  return { missing, absent };
+}
+
+/**
+ * Everything that builds these tables and nothing that touches any other —
+ * the `CREATE TABLE` and its indexes, never an `ALTER` (refused here) and never
+ * a row. Used to add a new table to a database that is otherwise already right.
+ */
+function statementsBuilding(tables: readonly string[]): string[] {
+  const wanted = new Set(tables);
+  return BOOTSTRAP_STATEMENTS.filter((statement) => {
+    if (isDataStatement(statement) || isNoise(statement) || isAlter(statement)) return false;
+    const table = /"public"\."(\w+)"/.exec(statement)?.[1];
+    return table !== undefined && wanted.has(table);
+  });
 }
 
 /**
@@ -488,6 +520,18 @@ async function apply(
         // this database will be rejected again next request, and stopping on it
         // would stall the load for good.
         cursor++;
+        /**
+         * Save the place HERE too, not only on the batch path.
+         *
+         * `oneAtATime` throws its way into this loop deliberately, which means
+         * it skipped the checkpoint above — so for a whole pass of DDL the
+         * caller's checkpoint was never once called, and a pass that outran the
+         * request deadline recorded nothing at all. That is precisely how a
+         * rebuild came to restart from zero on every request while the site
+         * served 500s. DDL is slow and few; one extra write per statement is
+         * the cheapest possible insurance against doing it all again.
+         */
+        await checkpoint?.(cursor);
       }
     }
   }
@@ -554,7 +598,9 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
     // marked done when the pass has actually run to the end, so an interrupted
     // rebuild is never mistaken for a finished one.
     if ((await readMeta(env, "schema_version")) !== BOOTSTRAP_VERSION) {
-      const missing = await missingColumns(env);
+      const { missing, absent } = await inspectSchema(env);
+      const onlyNewTables =
+        missing.length > 0 && missing.every((gap) => absent.includes(gap.split(".")[0]));
       if (missing.length === 0) {
         // The tables already have every column this bundle declares, so there
         // is nothing a rebuild would achieve — and rebuilding is the one thing
@@ -564,13 +610,61 @@ async function step(env: EnsureEnv, budget: Budget, deadline: number): Promise<b
           tables: EXPECTED_COLUMNS.size,
         });
         await writeMeta(env, "schema_version", BOOTSTRAP_VERSION);
+      } else if (onlyNewTables) {
+        /**
+         * Every gap is a table that simply is not there yet, so no existing
+         * table has changed shape. Create the new ones and leave everything
+         * else — and every row — alone.
+         *
+         * This path exists because the alternative deadlocked production. The
+         * bundle that added `wallets` and `wallet_txns` was treated as a shape
+         * change, and the rebuild it triggered can drop and recreate thirteen
+         * tables one DDL statement at a time — which this database cannot
+         * finish inside one request's deadline. Every attempt was abandoned
+         * part-way, and the cursor write that would have saved its place never
+         * ran, so the next request started from zero. Forever, with the site
+         * 500ing throughout. A new table needs none of that.
+         */
+        const additions = statementsBuilding(absent);
+        log.info("adding tables the bundle declares and the database lacks", {
+          tables: absent.join(", "),
+          statements: additions.length,
+        });
+        const from = readCursor(await readMeta(env, "add_cursor"));
+        const reached = await apply(env, additions, from, budget, {
+          oneAtATime: true,
+          checkpoint: (at) => writeMeta(env, "add_cursor", `${BOOTSTRAP_VERSION}:${at}`),
+        });
+        await writeMeta(env, "add_cursor", `${BOOTSTRAP_VERSION}:${reached}`);
+        if (reached < additions.length) {
+          log.info("still adding tables, will resume next request", {
+            added: reached,
+            of: additions.length,
+          });
+          return false;
+        }
+        // The existing tables were untouched, so the data already loaded is
+        // still valid — only the shape marker moves.
+        await writeMeta(env, "schema_version", BOOTSTRAP_VERSION);
       } else {
         log.info("rebuilding: the deployed schema is missing columns", {
           missing: missing.slice(0, 8).join(", "),
           count: missing.length,
         });
         const from = readCursor(await readMeta(env, "reset_cursor"));
-        const reached = await apply(env, RESET_STATEMENTS, from, budget, { oneAtATime: true });
+        /**
+         * Checkpoint every statement, exactly as the data pass does.
+         *
+         * Without this the reset could not survive its own deadline: `apply`
+         * returned only when the whole pass finished, so a rebuild too slow for
+         * one request recorded nothing and restarted from zero on the next one.
+         * That is not a hypothetical — it is what pinned `reset_cursor` at 0
+         * while production served 500s.
+         */
+        const reached = await apply(env, RESET_STATEMENTS, from, budget, {
+          oneAtATime: true,
+          checkpoint: (at) => writeMeta(env, "reset_cursor", `${BOOTSTRAP_VERSION}:${at}`),
+        });
         await writeMeta(env, "reset_cursor", `${BOOTSTRAP_VERSION}:${reached}`);
         if (reached < RESET_STATEMENTS.length) {
           log.info("bootstrap rebuilding, will resume next request", {
