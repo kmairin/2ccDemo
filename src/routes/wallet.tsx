@@ -28,6 +28,7 @@ import {
 } from "../auth";
 import { getDb } from "../db";
 import { formatDay, formatMoney, formatTime } from "../lib/format";
+import { createLogger } from "../logger";
 import { wallets } from "../schema";
 import {
   getWallet,
@@ -411,17 +412,37 @@ export const walletHeader: MiddlewareHandler<{ Bindings: AuthEnv }> = async (c, 
   const me = await currentUser(c);
   if (!me) return;
 
-  // One indexed lookup on top of the session read `currentUser` already did.
-  const db = getDb(c.env);
-  const [row] = await db
-    .select({ balanceCents: wallets.balanceCents, currency: wallets.currency })
-    .from(wallets)
-    .where(eq(wallets.userId, me.user.id))
-    .limit(1);
-  // No row means the member has never topped up, and therefore has not chosen a
-  // currency. An em dash says that; "$0" would assert a currency they have not
-  // picked, and would sit next to a "€0" on a checkout priced in euros.
-  const amount = row ? formatMoney(Number(row.balanceCents), row.currency) : EMPTY_BALANCE;
+  /**
+   * One indexed lookup on top of the session read `currentUser` already did —
+   * and it may not take the page down.
+   *
+   * This middleware runs on EVERY html response, so anything it throws becomes
+   * a 500 on every signed-in page in the product. It did: the deployment that
+   * introduced `wallets` served 500s to signed-in visitors on `/`, `/events`
+   * and everything else, while the same pages were fine signed out, because
+   * this one query failed and took the whole response with it.
+   *
+   * A balance in the header is decoration. If it cannot be read, say nothing
+   * and let the page through; the wallet page and the checkout do their own
+   * reads and report their own failures, where an error actually belongs.
+   */
+  let amount = EMPTY_BALANCE;
+  try {
+    const db = getDb(c.env);
+    const [row] = await db
+      .select({ balanceCents: wallets.balanceCents, currency: wallets.currency })
+      .from(wallets)
+      .where(eq(wallets.userId, me.user.id))
+      .limit(1);
+    // No row means the member has never topped up, and therefore has not chosen
+    // a currency. An em dash says that; "$0" would assert a currency they have
+    // not picked, and would sit next to a "€0" on a checkout priced in euros.
+    if (row) amount = formatMoney(Number(row.balanceCents), row.currency);
+  } catch (err) {
+    createLogger(c.env).warn("could not read the header balance", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   const html = (await c.res.text())
     .replace(HEADER_SLOT.desktop, headerBalanceHtml(amount, "desktop"))

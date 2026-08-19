@@ -112,7 +112,18 @@ api.get("/health", async (c) => {
         const [k, v] = Array.isArray(r) ? r : Object.values(r as object);
         meta[String(k)] = String(v);
       }
-      for (const t of ["communities", "events", "packages", "photos", "bookings"]) {
+      // SQL names, not UI names. `communities` was in this list for a while and
+      // reported -1 on every request, which read as a broken table when the
+      // table is simply called `circles` (src/schema.ts).
+      for (const t of [
+        "circles",
+        "events",
+        "packages",
+        "photos",
+        "bookings",
+        "wallets",
+        "wallet_txns",
+      ]) {
         try {
           const n = (await db.execute(sql.raw(`select count(*)::int from "${t}"`))) as unknown as unknown[];
           const first = n[0];
@@ -124,7 +135,40 @@ api.get("/health", async (c) => {
     } catch (err) {
       meta.error = err instanceof Error ? err.message.slice(0, 160) : String(err);
     }
-    return c.json({ status: "ok", bootstrap: bootstrapReport, meta, counts });
+
+    /**
+     * The wallet read the header middleware does, and its error in full.
+     *
+     * Deployed, every signed-in page 500d while every signed-out page was fine,
+     * which narrows it to this one query — and there is no console here to ask
+     * why. Reports the table's real columns beside the failure so a mismatch
+     * between the bundle and the database is visible in one request.
+     */
+    const wallet: Record<string, unknown> = {};
+    try {
+      const { getDb } = await import("../db");
+      const { sql } = await import("drizzle-orm");
+      const db = getDb(c.env);
+      const cols = (await db.execute(
+        sql`select "column_name" from "information_schema"."columns"
+            where "table_schema" = 'public' and "table_name" = 'wallets'
+            order by "ordinal_position"`,
+      )) as unknown as unknown[];
+      wallet.columns = cols.map((r) =>
+        String(Array.isArray(r) ? r[0] : Object.values(r as object)[0]),
+      );
+      await db.execute(
+        sql.raw(`select "balance_cents", "currency" from "wallets" where "user_id" = '_probe' limit 1`),
+      );
+      wallet.select = "ok";
+    } catch (err) {
+      const cause = (err as { cause?: unknown } | undefined)?.cause;
+      wallet.select = `${err instanceof Error ? err.message : String(err)}${
+        cause ? ` | cause: ${cause instanceof Error ? cause.message : String(cause)}` : ""
+      }`.slice(0, 400);
+    }
+
+    return c.json({ status: "ok", bootstrap: bootstrapReport, meta, counts, wallet });
   }
 
   // TEMPORARY diagnostic. `?schema=1` reports what the isolate ANSWERING IT has
